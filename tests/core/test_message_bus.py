@@ -20,7 +20,33 @@ async def test_publish_and_consume(redis_client: redis.Redis) -> None:
     messages = await bus.consume(channel, count=1)
     assert len(messages) == 1
     assert messages[0]["type"] == "test"
-    assert messages[0]["value"] == "42"  # Redis returns strings
+    assert messages[0]["value"] == 42  # Deserialized back to int
+
+
+@pytest.mark.asyncio
+async def test_publish_and_consume_nested_objects(redis_client: redis.Redis) -> None:
+    """Should serialize and deserialize nested dicts and lists."""
+    bus = MessageBus(redis_client)
+    channel = "test.nested.channel"
+
+    # Publish message with nested structures
+    nested_data = {
+        "market_id": "polymarket:btc-up",
+        "prices": {"yes": 0.45, "no": 0.55},
+        "tags": ["crypto", "btc", "short-term"],
+        "metadata": {"source": "api", "version": 2},
+    }
+    await bus.publish(channel, nested_data)
+
+    # Consume and verify nested objects are deserialized
+    messages = await bus.consume(channel, count=1)
+    assert len(messages) == 1
+    msg = messages[0]
+
+    assert msg["market_id"] == "polymarket:btc-up"
+    assert msg["prices"] == {"yes": 0.45, "no": 0.55}
+    assert msg["tags"] == ["crypto", "btc", "short-term"]
+    assert msg["metadata"]["version"] == 2
 
 
 @pytest.mark.asyncio

@@ -13,6 +13,17 @@ class MessageBus:
         """Initialize with Redis client."""
         self._client = client
 
+    def _deserialize_value(self, value: str) -> Any:
+        """Attempt to deserialize a JSON string back to Python object."""
+        try:
+            return json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return value
+
+    def _deserialize_message(self, data: dict[str, str]) -> dict[str, Any]:
+        """Deserialize all values in a message."""
+        return {k: self._deserialize_value(v) for k, v in data.items()}
+
     async def publish(self, channel: str, data: dict[str, Any]) -> str:
         """Publish message to a stream. Returns message ID."""
         # Serialize nested objects as JSON strings
@@ -34,7 +45,7 @@ class MessageBus:
         messages: list[dict[str, Any]] = []
         for _, entries in results:
             for _, data in entries:
-                messages.append(data)
+                messages.append(self._deserialize_message(data))
         return messages
 
     async def create_consumer_group(
@@ -69,7 +80,7 @@ class MessageBus:
         messages: list[tuple[str, dict[str, Any]]] = []
         for _, entries in results:
             for msg_id, data in entries:
-                messages.append((msg_id, data))
+                messages.append((msg_id, self._deserialize_message(data)))
         return messages
 
     async def ack(self, channel: str, group: str, message_id: str) -> None:
