@@ -17,8 +17,7 @@ class MessageBus:
         """Publish message to a stream. Returns message ID."""
         # Serialize nested objects as JSON strings
         flat_data: dict[str, str] = {
-            k: json.dumps(v) if isinstance(v, (dict, list)) else str(v)
-            for k, v in data.items()
+            k: json.dumps(v) if isinstance(v, (dict, list)) else str(v) for k, v in data.items()
         }
         message_id: str = await self._client.xadd(channel, flat_data)  # type: ignore[arg-type]
         return message_id
