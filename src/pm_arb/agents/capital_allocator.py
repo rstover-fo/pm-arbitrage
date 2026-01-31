@@ -191,7 +191,8 @@ class CapitalAllocatorAgent(BaseAgent):
         # Combine
         score = pnl_score + win_rate_bonus
 
-        return max(Decimal("0.1"), score)
+        min_score = Decimal("0.1")
+        return score if score > min_score else min_score
 
     async def _publish_allocation(self, strategy: str) -> None:
         """Publish allocation update for a strategy."""

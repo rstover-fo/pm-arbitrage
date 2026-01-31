@@ -9,7 +9,6 @@ from uuid import uuid4
 import structlog
 
 from pm_arb.agents.base import BaseAgent
-from pm_arb.core.models import Side
 
 logger = structlog.get_logger()
 
