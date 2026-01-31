@@ -136,3 +136,26 @@ class PaperExecutorAgent(BaseAgent):
                 "paper_trade": paper_trade,
             },
         )
+
+    def get_state_snapshot(self) -> dict[str, Any]:
+        """Return trade history snapshot for dashboard."""
+        recent = self._trades[-50:]  # Last 50 trades
+        return {
+            "trade_count": len(self._trades),
+            "recent_trades": [
+                {
+                    "id": t.id,
+                    "request_id": t.request_id,
+                    "market_id": t.market_id,
+                    "venue": t.venue,
+                    "side": t.side.value,
+                    "outcome": t.outcome,
+                    "amount": t.amount,
+                    "price": t.price,
+                    "fees": t.fees,
+                    "status": t.status.value,
+                    "executed_at": t.executed_at.isoformat(),
+                }
+                for t in reversed(recent)  # Most recent first
+            ],
+        }

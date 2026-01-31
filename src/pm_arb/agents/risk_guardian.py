@@ -217,3 +217,15 @@ class RiskGuardianAgent(BaseAgent):
                 "new_high_water_mark",
                 value=str(self._high_water_mark),
             )
+
+    def get_state_snapshot(self) -> dict[str, Any]:
+        """Return risk state snapshot for dashboard."""
+        return {
+            "current_value": self._current_value,
+            "high_water_mark": self._high_water_mark,
+            "daily_pnl": self._daily_pnl,
+            "initial_bankroll": self._initial_bankroll,
+            "positions": dict(self._positions),
+            "platform_exposure": dict(self._platform_exposure),
+            "halted": self._halted,
+        }

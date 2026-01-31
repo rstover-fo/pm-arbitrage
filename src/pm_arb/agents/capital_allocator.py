@@ -226,3 +226,17 @@ class CapitalAllocatorAgent(BaseAgent):
             }
             for strategy in self._strategies
         }
+
+    def get_state_snapshot(self) -> dict[str, Any]:
+        """Return complete state snapshot for dashboard."""
+        return {
+            "total_capital": self._total_capital,
+            "strategies": {
+                strategy: {
+                    **self._strategy_performance[strategy],
+                    "allocation_pct": self._allocations.get(strategy, Decimal("0")),
+                }
+                for strategy in self._strategies
+            },
+            "trades_since_rebalance": self._trades_since_rebalance,
+        }
