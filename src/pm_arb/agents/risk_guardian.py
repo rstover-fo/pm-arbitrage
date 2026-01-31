@@ -88,7 +88,29 @@ class RiskGuardianAgent(BaseAgent):
 
     async def _check_rules(self, request: TradeRequest) -> RiskDecision:
         """Check request against all risk rules."""
-        # Placeholder - rules implemented in subsequent tasks
+        # Rule 1: System halted
+        if self._halted:
+            return RiskDecision(
+                request_id=request.id,
+                approved=False,
+                reason="System is halted",
+                rule_triggered="system_halt",
+            )
+
+        # Rule 2: Position limit
+        position_limit = self._initial_bankroll * self._position_limit_pct
+        current_position = self._positions.get(request.market_id, Decimal("0"))
+        new_position = current_position + request.amount
+
+        if new_position > position_limit:
+            return RiskDecision(
+                request_id=request.id,
+                approved=False,
+                reason=f"Position would exceed limit: ${new_position} > ${position_limit}",
+                rule_triggered="position_limit",
+            )
+
+        # All rules passed
         return RiskDecision(
             request_id=request.id,
             approved=True,
