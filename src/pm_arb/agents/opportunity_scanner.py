@@ -38,6 +38,10 @@ class OpportunityScannerAgent(BaseAgent):
         self._market_oracle_map: dict[str, str] = {}  # market_id -> oracle_symbol
         self._market_thresholds: dict[str, dict[str, Any]] = {}
 
+        # Cross-platform matching
+        self._matched_markets: dict[str, list[str]] = {}  # event_id -> [market_ids]
+        self._market_to_event: dict[str, str] = {}  # market_id -> event_id
+
     def get_subscriptions(self) -> list[str]:
         """Subscribe to venue prices and oracle data."""
         return self._venue_channels + self._oracle_channels
@@ -56,6 +60,16 @@ class OpportunityScannerAgent(BaseAgent):
             "direction": direction,
             "oracle_symbol": oracle_symbol,
         }
+
+    def register_matched_markets(
+        self,
+        market_ids: list[str],
+        event_id: str,
+    ) -> None:
+        """Register markets that track the same underlying event."""
+        self._matched_markets[event_id] = market_ids
+        for market_id in market_ids:
+            self._market_to_event[market_id] = event_id
 
     async def handle_message(self, channel: str, data: dict[str, Any]) -> None:
         """Route messages to appropriate handler."""
@@ -103,18 +117,17 @@ class OpportunityScannerAgent(BaseAgent):
 
     async def _scan_for_opportunities(self, market: Market) -> None:
         """Scan for opportunities involving this market."""
-        # Check if this market has an oracle mapping
-        if market.id not in self._market_thresholds:
-            return
+        # Check oracle-based opportunities
+        if market.id in self._market_thresholds:
+            threshold_info = self._market_thresholds[market.id]
+            oracle_symbol = threshold_info["oracle_symbol"]
+            if oracle_symbol in self._oracle_values:
+                oracle_data = self._oracle_values[oracle_symbol]
+                await self._check_oracle_lag(market, oracle_data, threshold_info)
 
-        threshold_info = self._market_thresholds[market.id]
-        oracle_symbol = threshold_info["oracle_symbol"]
-
-        if oracle_symbol not in self._oracle_values:
-            return
-
-        oracle_data = self._oracle_values[oracle_symbol]
-        await self._check_oracle_lag(market, oracle_data, threshold_info)
+        # Check cross-platform opportunities
+        if market.id in self._market_to_event:
+            await self._check_cross_platform(market)
 
     async def _scan_oracle_opportunities(self, symbol: str, oracle_data: OracleData) -> None:
         """Scan for oracle-based opportunities when oracle updates."""
@@ -195,6 +208,62 @@ class OpportunityScannerAgent(BaseAgent):
                 "direction": direction,
                 "fair_yes_price": str(fair_yes_price),
                 "current_yes_price": str(current_yes),
+            },
+        )
+
+        await self._publish_opportunity(opportunity)
+
+    async def _check_cross_platform(self, updated_market: Market) -> None:
+        """Check for cross-platform arbitrage opportunities."""
+        event_id = self._market_to_event.get(updated_market.id)
+        if not event_id:
+            return
+
+        matched_ids = self._matched_markets.get(event_id, [])
+        if len(matched_ids) < 2:
+            return
+
+        # Get all markets for this event
+        markets = [
+            self._markets[mid]
+            for mid in matched_ids
+            if mid in self._markets
+        ]
+
+        if len(markets) < 2:
+            return
+
+        # Find max and min YES prices
+        prices = [(m, m.yes_price) for m in markets]
+        prices.sort(key=lambda x: x[1])
+
+        lowest_market, lowest_price = prices[0]
+        highest_market, highest_price = prices[-1]
+
+        # Calculate edge (buy YES on cheap venue, buy NO on expensive venue)
+        edge = highest_price - lowest_price
+
+        if edge < self._min_edge_pct:
+            return
+
+        # Signal strength based on price difference
+        signal_strength = min(Decimal("1.0"), edge * 5)
+
+        if signal_strength < self._min_signal_strength:
+            return
+
+        opportunity = Opportunity(
+            id=f"opp-{uuid4().hex[:8]}",
+            type=OpportunityType.CROSS_PLATFORM,
+            markets=[lowest_market.id, highest_market.id],
+            expected_edge=edge,
+            signal_strength=signal_strength,
+            metadata={
+                "event_id": event_id,
+                "buy_yes_venue": lowest_market.venue,
+                "buy_yes_price": str(lowest_price),
+                "buy_no_venue": highest_market.venue,
+                "buy_no_price": str(Decimal("1") - highest_price),
             },
         )
 

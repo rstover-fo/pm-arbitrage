@@ -85,3 +85,61 @@ async def test_detects_oracle_lag_opportunity() -> None:
     opp = published[0][1]
     assert opp["type"] == OpportunityType.ORACLE_LAG.value
     assert Decimal(opp["expected_edge"]) > Decimal("0.40")  # ~45% edge (should be ~95% not 50%)
+
+
+@pytest.mark.asyncio
+async def test_detects_cross_platform_opportunity() -> None:
+    """Should detect price discrepancy between matched markets on different venues."""
+    agent = OpportunityScannerAgent(
+        redis_url="redis://localhost:6379",
+        venue_channels=["venue.polymarket.prices", "venue.kalshi.prices"],
+        oracle_channels=[],
+        min_edge_pct=Decimal("0.03"),  # 3% edge threshold
+        min_signal_strength=Decimal("0.1"),
+    )
+
+    # Register two markets as tracking the same event
+    agent.register_matched_markets(
+        market_ids=["polymarket:btc-100k-jan", "kalshi:btc-100k-jan"],
+        event_id="btc-100k-jan-2026",
+    )
+
+    published = []
+
+    async def capture_publish(channel: str, data: dict[str, Any]) -> str:
+        published.append((channel, data))
+        return "mock-id"
+
+    agent.publish = capture_publish  # type: ignore[method-assign]
+
+    # Polymarket has YES at 60%
+    await agent._handle_venue_price(
+        "venue.polymarket.prices",
+        {
+            "market_id": "polymarket:btc-100k-jan",
+            "venue": "polymarket",
+            "title": "BTC above $100k in Jan?",
+            "yes_price": "0.60",
+            "no_price": "0.40",
+        },
+    )
+
+    # Kalshi has YES at 52% - 8% discrepancy
+    await agent._handle_venue_price(
+        "venue.kalshi.prices",
+        {
+            "market_id": "kalshi:btc-100k-jan",
+            "venue": "kalshi",
+            "title": "BTC above $100k in Jan?",
+            "yes_price": "0.52",
+            "no_price": "0.48",
+        },
+    )
+
+    # Should detect cross-platform opportunity
+    assert len(published) == 1
+    assert published[0][0] == "opportunities.detected"
+    opp = published[0][1]
+    assert opp["type"] == OpportunityType.CROSS_PLATFORM.value
+    assert len(opp["markets"]) == 2
+    assert Decimal(opp["expected_edge"]) >= Decimal("0.03")
