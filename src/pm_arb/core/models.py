@@ -148,3 +148,13 @@ class StrategyPerformance(BaseModel):
     sharpe_ratio: Decimal | None = None
     max_drawdown: Decimal | None = None
     allocation_pct: Decimal  # Current capital allocation
+
+
+class StrategyAllocation(BaseModel):
+    """Current capital allocation for a strategy."""
+
+    strategy: str
+    allocation_pct: Decimal
+    total_capital: Decimal
+    available_capital: Decimal
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

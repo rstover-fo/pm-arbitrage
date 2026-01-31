@@ -479,3 +479,22 @@ class TestStrategyPerformance:
         )
 
         assert perf.total_pnl == Decimal("-75.00")
+
+
+class TestStrategyAllocation:
+    """Tests for StrategyAllocation model."""
+
+    def test_allocation_creation(self) -> None:
+        """Should create strategy allocation."""
+        from pm_arb.core.models import StrategyAllocation
+
+        allocation = StrategyAllocation(
+            strategy="oracle-sniper",
+            allocation_pct=Decimal("0.25"),
+            total_capital=Decimal("1000"),
+            available_capital=Decimal("250"),
+        )
+
+        assert allocation.strategy == "oracle-sniper"
+        assert allocation.allocation_pct == Decimal("0.25")
+        assert allocation.available_capital == Decimal("250")
