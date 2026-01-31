@@ -3,6 +3,8 @@
 from decimal import Decimal
 from typing import Any, Protocol
 
+from pm_arb.core.models import Trade
+
 
 class AllocatorProtocol(Protocol):
     """Protocol for Capital Allocator interface."""
@@ -25,6 +27,12 @@ class GuardianProtocol(Protocol):
     _halted: bool
 
 
+class ExecutorProtocol(Protocol):
+    """Protocol for Paper Executor interface."""
+
+    _trades: list[Trade]
+
+
 class DashboardService:
     """Aggregates data from agents for dashboard display."""
 
@@ -32,9 +40,11 @@ class DashboardService:
         self,
         allocator: AllocatorProtocol,
         guardian: GuardianProtocol,
+        executor: ExecutorProtocol | None = None,
     ) -> None:
         self._allocator = allocator
         self._guardian = guardian
+        self._executor = executor
 
     def get_strategy_summary(self) -> list[dict[str, Any]]:
         """Get performance summary for all strategies."""
@@ -105,3 +115,29 @@ class DashboardService:
             "overall_win_rate": overall_win_rate,
             "strategy_count": len(strategies),
         }
+
+    def get_recent_trades(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Get recent trades in reverse chronological order."""
+        if not self._executor:
+            return []
+
+        trades = list(self._executor._trades)
+        # Sort by executed_at descending
+        trades.sort(key=lambda t: t.executed_at, reverse=True)
+
+        return [
+            {
+                "id": t.id,
+                "request_id": t.request_id,
+                "market_id": t.market_id,
+                "venue": t.venue,
+                "side": t.side.value,
+                "outcome": t.outcome,
+                "amount": t.amount,
+                "price": t.price,
+                "fees": t.fees,
+                "status": t.status.value,
+                "executed_at": t.executed_at.isoformat(),
+            }
+            for t in trades[:limit]
+        ]
