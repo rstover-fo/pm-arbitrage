@@ -88,6 +88,9 @@ class RiskGuardianAgent(BaseAgent):
 
     async def _check_rules(self, request: TradeRequest) -> RiskDecision:
         """Check request against all risk rules."""
+        # Reset daily tracking if new day
+        self._maybe_reset_daily()
+
         # Rule 1: System halted
         if self._halted:
             return RiskDecision(
@@ -97,7 +100,17 @@ class RiskGuardianAgent(BaseAgent):
                 rule_triggered="system_halt",
             )
 
-        # Rule 2: Position limit
+        # Rule 2: Daily loss limit
+        daily_loss_limit = self._initial_bankroll * self._daily_loss_limit_pct
+        if self._daily_pnl < -daily_loss_limit:
+            return RiskDecision(
+                request_id=request.id,
+                approved=False,
+                reason=f"Daily loss limit exceeded: ${abs(self._daily_pnl)} > ${daily_loss_limit}",
+                rule_triggered="daily_loss_limit",
+            )
+
+        # Rule 3: Position limit
         position_limit = self._initial_bankroll * self._position_limit_pct
         current_position = self._positions.get(request.market_id, Decimal("0"))
         new_position = current_position + request.amount
@@ -110,7 +123,7 @@ class RiskGuardianAgent(BaseAgent):
                 rule_triggered="position_limit",
             )
 
-        # Rule 3: Platform limit
+        # Rule 4: Platform limit
         platform_limit = self._initial_bankroll * self._platform_limit_pct
         venue = request.market_id.split(":")[0] if ":" in request.market_id else "unknown"
         current_platform = self._platform_exposure.get(venue, Decimal("0"))
@@ -130,6 +143,18 @@ class RiskGuardianAgent(BaseAgent):
             approved=True,
             reason="All rules passed",
         )
+
+    def _maybe_reset_daily(self) -> None:
+        """Reset daily tracking if it's a new day."""
+        today = datetime.now(UTC).date()
+        if today != self._daily_reset_date:
+            logger.info(
+                "daily_reset",
+                previous_pnl=str(self._daily_pnl),
+                previous_date=str(self._daily_reset_date),
+            )
+            self._daily_pnl = Decimal("0")
+            self._daily_reset_date = today
 
     async def _publish_decision(self, decision: RiskDecision) -> None:
         """Publish risk decision."""

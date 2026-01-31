@@ -133,3 +133,75 @@ async def test_rejects_trade_exceeding_platform_limit() -> None:
     assert decisions[0][1]["approved"] is True
     assert decisions[1][1]["approved"] is False
     assert decisions[1][1]["rule_triggered"] == "platform_limit"
+
+
+@pytest.mark.asyncio
+async def test_rejects_trade_when_daily_loss_limit_exceeded() -> None:
+    """Should reject trades when daily loss limit is hit."""
+    guardian = RiskGuardianAgent(
+        redis_url="redis://localhost:6379",
+        initial_bankroll=Decimal("1000"),
+        daily_loss_limit_pct=Decimal("0.05"),  # 5% = $50 max daily loss
+    )
+
+    # Simulate $60 loss already today
+    guardian._daily_pnl = Decimal("-60")
+
+    decisions: list[tuple[str, dict[str, Any]]] = []
+
+    async def capture_publish(channel: str, data: dict[str, Any]) -> str:
+        decisions.append((channel, data))
+        return "mock-id"
+
+    guardian.publish = capture_publish  # type: ignore[method-assign]
+
+    # Try to trade - should be rejected due to daily loss
+    await guardian._evaluate_request({
+        "id": "req-001",
+        "market_id": "polymarket:btc-100k",
+        "side": "buy",
+        "outcome": "YES",
+        "amount": "10",
+        "max_price": "0.50",
+    })
+
+    assert len(decisions) == 1
+    assert decisions[0][1]["approved"] is False
+    assert decisions[0][1]["rule_triggered"] == "daily_loss_limit"
+
+
+@pytest.mark.asyncio
+async def test_resets_daily_loss_on_new_day() -> None:
+    """Should reset daily loss tracking at start of new day."""
+    from datetime import timedelta
+
+    guardian = RiskGuardianAgent(
+        redis_url="redis://localhost:6379",
+        initial_bankroll=Decimal("1000"),
+        daily_loss_limit_pct=Decimal("0.05"),
+    )
+
+    # Simulate loss from yesterday
+    guardian._daily_pnl = Decimal("-60")
+    guardian._daily_reset_date = (datetime.now(UTC) - timedelta(days=1)).date()
+
+    decisions: list[tuple[str, dict[str, Any]]] = []
+
+    async def capture_publish(channel: str, data: dict[str, Any]) -> str:
+        decisions.append((channel, data))
+        return "mock-id"
+
+    guardian.publish = capture_publish  # type: ignore[method-assign]
+
+    # Trade should be approved - new day resets loss tracking
+    await guardian._evaluate_request({
+        "id": "req-001",
+        "market_id": "polymarket:btc-100k",
+        "side": "buy",
+        "outcome": "YES",
+        "amount": "10",
+        "max_price": "0.50",
+    })
+
+    assert len(decisions) == 1
+    assert decisions[0][1]["approved"] is True
