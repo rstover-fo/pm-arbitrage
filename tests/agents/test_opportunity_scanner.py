@@ -1,15 +1,13 @@
 """Tests for Opportunity Scanner agent."""
 
-import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from pm_arb.agents.opportunity_scanner import OpportunityScannerAgent
-from pm_arb.core.models import Market, OpportunityType
+from pm_arb.core.models import OpportunityType
 
 
 @pytest.mark.asyncio
@@ -47,8 +45,7 @@ async def test_detects_oracle_lag_opportunity() -> None:
 
     # Simulate: BTC jumps to $105k but market still prices YES at 50%
     # This is a buying opportunity - BTC is already above threshold
-    published = []
-    original_publish = agent.publish
+    published: list[tuple[str, dict[str, Any]]] = []
 
     async def capture_publish(channel: str, data: dict[str, Any]) -> str:
         published.append((channel, data))
@@ -174,11 +171,22 @@ async def test_signal_strength_increases_with_edge() -> None:
     # Test 1: BTC at $110k (10% above threshold) - high signal
     await agent._handle_oracle_data(
         "oracle.binance.BTC",
-        {"source": "binance", "symbol": "BTC", "value": "110000", "timestamp": datetime.now(UTC).isoformat()},
+        {
+            "source": "binance",
+            "symbol": "BTC",
+            "value": "110000",
+            "timestamp": datetime.now(UTC).isoformat(),
+        },
     )
     await agent._handle_venue_price(
         "venue.polymarket.prices",
-        {"market_id": "polymarket:btc-above-100k", "venue": "polymarket", "title": "BTC>100k", "yes_price": "0.50", "no_price": "0.50"},
+        {
+            "market_id": "polymarket:btc-above-100k",
+            "venue": "polymarket",
+            "title": "BTC>100k",
+            "yes_price": "0.50",
+            "no_price": "0.50",
+        },
     )
 
     high_edge_signal = Decimal(published[0][1]["signal_strength"])
@@ -187,11 +195,22 @@ async def test_signal_strength_increases_with_edge() -> None:
     published.clear()
     await agent._handle_oracle_data(
         "oracle.binance.BTC",
-        {"source": "binance", "symbol": "BTC", "value": "102000", "timestamp": datetime.now(UTC).isoformat()},
+        {
+            "source": "binance",
+            "symbol": "BTC",
+            "value": "102000",
+            "timestamp": datetime.now(UTC).isoformat(),
+        },
     )
     await agent._handle_venue_price(
         "venue.polymarket.prices",
-        {"market_id": "polymarket:btc-above-100k", "venue": "polymarket", "title": "BTC>100k", "yes_price": "0.50", "no_price": "0.50"},
+        {
+            "market_id": "polymarket:btc-above-100k",
+            "venue": "polymarket",
+            "title": "BTC>100k",
+            "yes_price": "0.50",
+            "no_price": "0.50",
+        },
     )
 
     low_edge_signal = Decimal(published[0][1]["signal_strength"])
@@ -228,11 +247,22 @@ async def test_filters_low_signal_opportunities() -> None:
     # BTC barely above threshold - weak signal
     await agent._handle_oracle_data(
         "oracle.binance.BTC",
-        {"source": "binance", "symbol": "BTC", "value": "100500", "timestamp": datetime.now(UTC).isoformat()},
+        {
+            "source": "binance",
+            "symbol": "BTC",
+            "value": "100500",
+            "timestamp": datetime.now(UTC).isoformat(),
+        },
     )
     await agent._handle_venue_price(
         "venue.polymarket.prices",
-        {"market_id": "polymarket:btc-above-100k", "venue": "polymarket", "title": "BTC>100k", "yes_price": "0.50", "no_price": "0.50"},
+        {
+            "market_id": "polymarket:btc-above-100k",
+            "venue": "polymarket",
+            "title": "BTC>100k",
+            "yes_price": "0.50",
+            "no_price": "0.50",
+        },
     )
 
     # Should NOT publish due to low signal

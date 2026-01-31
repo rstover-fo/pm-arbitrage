@@ -52,7 +52,6 @@ async def test_scanner_detects_live_opportunities() -> None:
     # Patch handlers to capture data
     original_venue_handler = scanner._handle_venue_price
     original_oracle_handler = scanner._handle_oracle_data
-    original_publish = scanner._publish_opportunity
 
     async def capture_venue(channel, data):
         venue_prices_received.append(data)

@@ -1,6 +1,5 @@
 """Opportunity Scanner Agent - detects arbitrage opportunities."""
 
-import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -224,11 +223,7 @@ class OpportunityScannerAgent(BaseAgent):
             return
 
         # Get all markets for this event
-        markets = [
-            self._markets[mid]
-            for mid in matched_ids
-            if mid in self._markets
-        ]
+        markets = [self._markets[mid] for mid in matched_ids if mid in self._markets]
 
         if len(markets) < 2:
             return
