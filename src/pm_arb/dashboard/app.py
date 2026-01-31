@@ -162,9 +162,7 @@ def render_trades() -> None:
     df["fees"] = df["fees"].apply(lambda x: f"${x:,.3f}")
 
     # Select columns
-    display_df = df[
-        ["executed_at", "market_id", "side", "outcome", "amount", "price", "status"]
-    ]
+    display_df = df[["executed_at", "market_id", "side", "outcome", "amount", "price", "status"]]
     display_df.columns = ["Time", "Market", "Side", "Outcome", "Amount", "Price", "Status"]
 
     st.dataframe(display_df, use_container_width=True, hide_index=True)

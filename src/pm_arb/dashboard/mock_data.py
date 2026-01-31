@@ -2,9 +2,10 @@
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any
 
 
-def get_mock_portfolio() -> dict:
+def get_mock_portfolio() -> dict[str, Any]:
     """Return mock portfolio summary."""
     return {
         "total_capital": Decimal("1000"),
@@ -17,7 +18,7 @@ def get_mock_portfolio() -> dict:
     }
 
 
-def get_mock_strategies() -> list[dict]:
+def get_mock_strategies() -> list[dict[str, Any]]:
     """Return mock strategy summaries."""
     return [
         {
@@ -45,7 +46,7 @@ def get_mock_strategies() -> list[dict]:
     ]
 
 
-def get_mock_risk_state() -> dict:
+def get_mock_risk_state() -> dict[str, Any]:
     """Return mock risk metrics."""
     return {
         "current_value": Decimal("1125"),
@@ -65,7 +66,7 @@ def get_mock_risk_state() -> dict:
     }
 
 
-def get_mock_trades() -> list[dict]:
+def get_mock_trades() -> list[dict[str, Any]]:
     """Return mock recent trades."""
     return [
         {

@@ -56,17 +56,19 @@ class DashboardService:
             wins = perf.get("wins", 0)
             win_rate = Decimal(str(wins)) / Decimal(str(trades)) if trades > 0 else Decimal("0")
 
-            summaries.append({
-                "strategy": strategy,
-                "total_pnl": perf.get("total_pnl", Decimal("0")),
-                "trades": trades,
-                "wins": wins,
-                "losses": perf.get("losses", 0),
-                "win_rate": win_rate,
-                "largest_win": perf.get("largest_win", Decimal("0")),
-                "largest_loss": perf.get("largest_loss", Decimal("0")),
-                "allocation_pct": perf.get("allocation_pct", Decimal("0")),
-            })
+            summaries.append(
+                {
+                    "strategy": strategy,
+                    "total_pnl": perf.get("total_pnl", Decimal("0")),
+                    "trades": trades,
+                    "wins": wins,
+                    "losses": perf.get("losses", 0),
+                    "win_rate": win_rate,
+                    "largest_win": perf.get("largest_win", Decimal("0")),
+                    "largest_loss": perf.get("largest_loss", Decimal("0")),
+                    "allocation_pct": perf.get("allocation_pct", Decimal("0")),
+                }
+            )
 
         # Sort by PnL descending
         summaries.sort(key=lambda x: x["total_pnl"], reverse=True)

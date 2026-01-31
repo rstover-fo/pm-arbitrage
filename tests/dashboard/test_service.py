@@ -4,8 +4,6 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-import pytest
-
 from pm_arb.dashboard.service import DashboardService
 
 
