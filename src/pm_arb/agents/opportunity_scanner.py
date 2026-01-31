@@ -36,10 +36,26 @@ class OpportunityScannerAgent(BaseAgent):
         self._markets: dict[str, Market] = {}
         self._oracle_values: dict[str, OracleData] = {}
         self._market_oracle_map: dict[str, str] = {}  # market_id -> oracle_symbol
+        self._market_thresholds: dict[str, dict[str, Any]] = {}
 
     def get_subscriptions(self) -> list[str]:
         """Subscribe to venue prices and oracle data."""
         return self._venue_channels + self._oracle_channels
+
+    def register_market_oracle_mapping(
+        self,
+        market_id: str,
+        oracle_symbol: str,
+        threshold: Decimal,
+        direction: str,  # "above" or "below"
+    ) -> None:
+        """Register a market that tracks an oracle threshold."""
+        self._market_oracle_map[market_id] = oracle_symbol
+        self._market_thresholds[market_id] = {
+            "threshold": threshold,
+            "direction": direction,
+            "oracle_symbol": oracle_symbol,
+        }
 
     async def handle_message(self, channel: str, data: dict[str, Any]) -> None:
         """Route messages to appropriate handler."""
@@ -87,10 +103,124 @@ class OpportunityScannerAgent(BaseAgent):
 
     async def _scan_for_opportunities(self, market: Market) -> None:
         """Scan for opportunities involving this market."""
-        # Placeholder - will be implemented in Task 3.2
-        pass
+        # Check if this market has an oracle mapping
+        if market.id not in self._market_thresholds:
+            return
+
+        threshold_info = self._market_thresholds[market.id]
+        oracle_symbol = threshold_info["oracle_symbol"]
+
+        if oracle_symbol not in self._oracle_values:
+            return
+
+        oracle_data = self._oracle_values[oracle_symbol]
+        await self._check_oracle_lag(market, oracle_data, threshold_info)
 
     async def _scan_oracle_opportunities(self, symbol: str, oracle_data: OracleData) -> None:
-        """Scan for oracle-based opportunities."""
-        # Placeholder - will be implemented in Task 3.2
-        pass
+        """Scan for oracle-based opportunities when oracle updates."""
+        # Find all markets that track this oracle
+        for market_id, oracle_symbol in self._market_oracle_map.items():
+            if oracle_symbol != symbol:
+                continue
+            if market_id not in self._markets:
+                continue
+            if market_id not in self._market_thresholds:
+                continue
+
+            market = self._markets[market_id]
+            threshold_info = self._market_thresholds[market_id]
+            await self._check_oracle_lag(market, oracle_data, threshold_info)
+
+    async def _check_oracle_lag(
+        self,
+        market: Market,
+        oracle_data: OracleData,
+        threshold_info: dict[str, Any],
+    ) -> None:
+        """Check if market price lags behind oracle reality."""
+        threshold = threshold_info["threshold"]
+        direction = threshold_info["direction"]
+
+        # Calculate what the fair price should be based on oracle
+        if direction == "above":
+            # If oracle > threshold, YES should be ~1.0
+            oracle_suggests_yes = oracle_data.value > threshold
+        else:
+            # If oracle < threshold, YES should be ~1.0
+            oracle_suggests_yes = oracle_data.value < threshold
+
+        # Calculate implied probability from oracle
+        # If condition is met, fair value is high (0.95)
+        # If not met, fair value is low (0.05)
+        # Add buffer zone around threshold
+        distance_pct = abs(oracle_data.value - threshold) / threshold
+
+        if oracle_suggests_yes:
+            # Condition met - YES should be high
+            if distance_pct > Decimal("0.05"):  # 5% buffer
+                fair_yes_price = Decimal("0.95")
+            else:
+                fair_yes_price = Decimal("0.50") + (distance_pct * 10)  # Scale up
+        else:
+            # Condition not met - YES should be low
+            if distance_pct > Decimal("0.05"):
+                fair_yes_price = Decimal("0.05")
+            else:
+                fair_yes_price = Decimal("0.50") - (distance_pct * 10)
+
+        # Calculate edge
+        current_yes = market.yes_price
+        edge = fair_yes_price - current_yes
+
+        if abs(edge) < self._min_edge_pct:
+            return  # Not enough edge
+
+        # Calculate signal strength based on oracle distance from threshold
+        signal_strength = min(Decimal("1.0"), distance_pct * 10)
+
+        if signal_strength < self._min_signal_strength:
+            return
+
+        # Publish opportunity
+        opportunity = Opportunity(
+            id=f"opp-{uuid4().hex[:8]}",
+            type=OpportunityType.ORACLE_LAG,
+            markets=[market.id],
+            oracle_source=oracle_data.source,
+            oracle_value=oracle_data.value,
+            expected_edge=edge,
+            signal_strength=signal_strength,
+            metadata={
+                "threshold": str(threshold),
+                "direction": direction,
+                "fair_yes_price": str(fair_yes_price),
+                "current_yes_price": str(current_yes),
+            },
+        )
+
+        await self._publish_opportunity(opportunity)
+
+    async def _publish_opportunity(self, opportunity: Opportunity) -> None:
+        """Publish detected opportunity."""
+        logger.info(
+            "opportunity_detected",
+            opp_id=opportunity.id,
+            type=opportunity.type.value,
+            edge=str(opportunity.expected_edge),
+            signal=str(opportunity.signal_strength),
+        )
+
+        await self.publish(
+            "opportunities.detected",
+            {
+                "id": opportunity.id,
+                "type": opportunity.type.value,
+                "markets": opportunity.markets,
+                "oracle_source": opportunity.oracle_source,
+                "oracle_value": str(opportunity.oracle_value) if opportunity.oracle_value else None,
+                "expected_edge": str(opportunity.expected_edge),
+                "signal_strength": str(opportunity.signal_strength),
+                "detected_at": opportunity.detected_at.isoformat(),
+                "metadata": opportunity.metadata,
+            },
+        )
