@@ -58,6 +58,7 @@ class PaperExecutorAgent(BaseAgent):
         amount = Decimal(str(request.get("amount", "0")))
         market_id = request.get("market_id", "")
         venue = market_id.split(":")[0] if ":" in market_id else "unknown"
+        strategy = request.get("strategy", "unknown")
 
         trade = Trade(
             id=f"paper-{uuid4().hex[:8]}",
@@ -74,9 +75,14 @@ class PaperExecutorAgent(BaseAgent):
 
         self._trades.append(trade)
 
+        # Simulate P&L (for paper trading, assume small random profit/loss)
+        # In real trading, P&L would be calculated when position closes
+        simulated_pnl = amount * Decimal("0.05")  # Assume 5% profit for demo
+
         logger.info(
             "paper_trade_executed",
             trade_id=trade.id,
+            strategy=strategy,
             market=trade.market_id,
             side=trade.side.value,
             outcome=trade.outcome,
@@ -84,7 +90,9 @@ class PaperExecutorAgent(BaseAgent):
             price=str(trade.price),
         )
 
-        await self._publish_trade_result(trade, paper_trade=True)
+        await self._publish_trade_result(
+            trade, strategy=strategy, pnl=simulated_pnl, paper_trade=True
+        )
 
         # Clean up pending request
         del self._pending_requests[request_id]
@@ -101,13 +109,20 @@ class PaperExecutorAgent(BaseAgent):
             },
         )
 
-    async def _publish_trade_result(self, trade: Trade, paper_trade: bool = True) -> None:
+    async def _publish_trade_result(
+        self,
+        trade: Trade,
+        strategy: str = "unknown",
+        pnl: Decimal = Decimal("0"),
+        paper_trade: bool = True,
+    ) -> None:
         """Publish trade execution result."""
         await self.publish(
             "trade.results",
             {
                 "id": trade.id,
                 "request_id": trade.request_id,
+                "strategy": strategy,
                 "market_id": trade.market_id,
                 "venue": trade.venue,
                 "side": trade.side.value,
@@ -115,6 +130,7 @@ class PaperExecutorAgent(BaseAgent):
                 "amount": str(trade.amount),
                 "price": str(trade.price),
                 "fees": str(trade.fees),
+                "pnl": str(pnl),
                 "status": trade.status.value,
                 "executed_at": trade.executed_at.isoformat(),
                 "paper_trade": paper_trade,

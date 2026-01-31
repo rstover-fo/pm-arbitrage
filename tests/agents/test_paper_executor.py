@@ -90,3 +90,43 @@ async def test_executor_ignores_rejected_trade() -> None:
     # Should publish rejection result, not a fill
     assert len(published) == 1
     assert published[0][1]["status"] == TradeStatus.REJECTED.value
+
+
+@pytest.mark.asyncio
+async def test_executor_includes_strategy_in_result() -> None:
+    """Executor should include strategy name in trade result."""
+    executor = PaperExecutorAgent(redis_url="redis://localhost:6379")
+
+    published: list[tuple[str, dict[str, Any]]] = []
+
+    async def capture_publish(channel: str, data: dict[str, Any]) -> str:
+        published.append((channel, data))
+        return "mock-id"
+
+    executor.publish = capture_publish  # type: ignore[method-assign]
+
+    # Store pending request with strategy
+    executor._pending_requests["req-001"] = {
+        "id": "req-001",
+        "opportunity_id": "opp-001",
+        "strategy": "oracle-sniper",
+        "market_id": "polymarket:btc-100k",
+        "side": "buy",
+        "outcome": "YES",
+        "amount": "50",
+        "max_price": "0.55",
+    }
+
+    await executor.handle_message(
+        "trade.decisions",
+        {
+            "request_id": "req-001",
+            "approved": True,
+            "reason": "All rules passed",
+        },
+    )
+
+    assert len(published) == 1
+    result = published[0][1]
+    assert result["strategy"] == "oracle-sniper"
+    assert "pnl" in result  # Should include P&L field
