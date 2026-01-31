@@ -8,7 +8,7 @@ from uuid import uuid4
 import structlog
 
 from pm_arb.agents.base import BaseAgent
-from pm_arb.core.models import RiskDecision, Side, TradeRequest, TradeStatus
+from pm_arb.core.models import RiskDecision, Side, TradeRequest
 
 logger = structlog.get_logger()
 

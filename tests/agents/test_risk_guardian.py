@@ -7,7 +7,6 @@ from typing import Any
 import pytest
 
 from pm_arb.agents.risk_guardian import RiskGuardianAgent
-from pm_arb.core.models import Side, TradeRequest
 
 
 @pytest.mark.asyncio
@@ -41,16 +40,18 @@ async def test_rejects_trade_exceeding_position_limit() -> None:
     guardian.publish = capture_publish  # type: ignore[method-assign]
 
     # Request $150 trade - exceeds 10% limit
-    await guardian._evaluate_request({
-        "id": "req-001",
-        "opportunity_id": "opp-001",
-        "strategy": "test-strategy",
-        "market_id": "polymarket:btc-100k",
-        "side": "buy",
-        "outcome": "YES",
-        "amount": "150",
-        "max_price": "0.50",
-    })
+    await guardian._evaluate_request(
+        {
+            "id": "req-001",
+            "opportunity_id": "opp-001",
+            "strategy": "test-strategy",
+            "market_id": "polymarket:btc-100k",
+            "side": "buy",
+            "outcome": "YES",
+            "amount": "150",
+            "max_price": "0.50",
+        }
+    )
 
     assert len(decisions) == 1
     assert decisions[0][0] == "trade.decisions"
@@ -76,16 +77,18 @@ async def test_approves_trade_within_position_limit() -> None:
     guardian.publish = capture_publish  # type: ignore[method-assign]
 
     # Request $80 trade - within 10% limit
-    await guardian._evaluate_request({
-        "id": "req-001",
-        "opportunity_id": "opp-001",
-        "strategy": "test-strategy",
-        "market_id": "polymarket:btc-100k",
-        "side": "buy",
-        "outcome": "YES",
-        "amount": "80",
-        "max_price": "0.50",
-    })
+    await guardian._evaluate_request(
+        {
+            "id": "req-001",
+            "opportunity_id": "opp-001",
+            "strategy": "test-strategy",
+            "market_id": "polymarket:btc-100k",
+            "side": "buy",
+            "outcome": "YES",
+            "amount": "80",
+            "max_price": "0.50",
+        }
+    )
 
     assert len(decisions) == 1
     assert decisions[0][1]["approved"] is True
@@ -110,24 +113,28 @@ async def test_rejects_trade_exceeding_platform_limit() -> None:
     guardian.publish = capture_publish  # type: ignore[method-assign]
 
     # First trade: $200 to polymarket (within limit)
-    await guardian._evaluate_request({
-        "id": "req-001",
-        "market_id": "polymarket:btc-100k",
-        "side": "buy",
-        "outcome": "YES",
-        "amount": "200",
-        "max_price": "0.50",
-    })
+    await guardian._evaluate_request(
+        {
+            "id": "req-001",
+            "market_id": "polymarket:btc-100k",
+            "side": "buy",
+            "outcome": "YES",
+            "amount": "200",
+            "max_price": "0.50",
+        }
+    )
 
     # Second trade: $150 more to polymarket (would exceed $300 limit)
-    await guardian._evaluate_request({
-        "id": "req-002",
-        "market_id": "polymarket:eth-5k",
-        "side": "buy",
-        "outcome": "YES",
-        "amount": "150",
-        "max_price": "0.50",
-    })
+    await guardian._evaluate_request(
+        {
+            "id": "req-002",
+            "market_id": "polymarket:eth-5k",
+            "side": "buy",
+            "outcome": "YES",
+            "amount": "150",
+            "max_price": "0.50",
+        }
+    )
 
     assert len(decisions) == 2
     assert decisions[0][1]["approved"] is True
@@ -156,14 +163,16 @@ async def test_rejects_trade_when_daily_loss_limit_exceeded() -> None:
     guardian.publish = capture_publish  # type: ignore[method-assign]
 
     # Try to trade - should be rejected due to daily loss
-    await guardian._evaluate_request({
-        "id": "req-001",
-        "market_id": "polymarket:btc-100k",
-        "side": "buy",
-        "outcome": "YES",
-        "amount": "10",
-        "max_price": "0.50",
-    })
+    await guardian._evaluate_request(
+        {
+            "id": "req-001",
+            "market_id": "polymarket:btc-100k",
+            "side": "buy",
+            "outcome": "YES",
+            "amount": "10",
+            "max_price": "0.50",
+        }
+    )
 
     assert len(decisions) == 1
     assert decisions[0][1]["approved"] is False
@@ -194,14 +203,16 @@ async def test_resets_daily_loss_on_new_day() -> None:
     guardian.publish = capture_publish  # type: ignore[method-assign]
 
     # Trade should be approved - new day resets loss tracking
-    await guardian._evaluate_request({
-        "id": "req-001",
-        "market_id": "polymarket:btc-100k",
-        "side": "buy",
-        "outcome": "YES",
-        "amount": "10",
-        "max_price": "0.50",
-    })
+    await guardian._evaluate_request(
+        {
+            "id": "req-001",
+            "market_id": "polymarket:btc-100k",
+            "side": "buy",
+            "outcome": "YES",
+            "amount": "10",
+            "max_price": "0.50",
+        }
+    )
 
     assert len(decisions) == 1
     assert decisions[0][1]["approved"] is True
@@ -229,14 +240,16 @@ async def test_halts_system_on_drawdown() -> None:
     guardian.publish = capture_publish  # type: ignore[method-assign]
 
     # Any trade should be rejected and system should halt
-    await guardian._evaluate_request({
-        "id": "req-001",
-        "market_id": "polymarket:btc-100k",
-        "side": "buy",
-        "outcome": "YES",
-        "amount": "10",
-        "max_price": "0.50",
-    })
+    await guardian._evaluate_request(
+        {
+            "id": "req-001",
+            "market_id": "polymarket:btc-100k",
+            "side": "buy",
+            "outcome": "YES",
+            "amount": "10",
+            "max_price": "0.50",
+        }
+    )
 
     assert len(decisions) == 1
     assert decisions[0][1]["approved"] is False

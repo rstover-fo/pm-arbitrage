@@ -6,7 +6,6 @@ from typing import Any
 
 import pytest
 
-from pm_arb.agents.opportunity_scanner import OpportunityScannerAgent
 from pm_arb.agents.paper_executor import PaperExecutorAgent
 from pm_arb.agents.risk_guardian import RiskGuardianAgent
 from pm_arb.core.models import TradeStatus

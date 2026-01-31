@@ -1,6 +1,5 @@
 """Tests for Paper Executor agent."""
 
-from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
