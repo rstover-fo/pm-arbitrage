@@ -205,3 +205,63 @@ async def test_resets_daily_loss_on_new_day() -> None:
 
     assert len(decisions) == 1
     assert decisions[0][1]["approved"] is True
+
+
+@pytest.mark.asyncio
+async def test_halts_system_on_drawdown() -> None:
+    """Should halt system when drawdown exceeds limit."""
+    guardian = RiskGuardianAgent(
+        redis_url="redis://localhost:6379",
+        initial_bankroll=Decimal("1000"),
+        drawdown_limit_pct=Decimal("0.20"),  # 20% drawdown limit
+    )
+
+    # Simulate: portfolio grew to $1200, then dropped to $900 (25% drawdown)
+    guardian._high_water_mark = Decimal("1200")
+    guardian._current_value = Decimal("900")
+
+    decisions: list[tuple[str, dict[str, Any]]] = []
+
+    async def capture_publish(channel: str, data: dict[str, Any]) -> str:
+        decisions.append((channel, data))
+        return "mock-id"
+
+    guardian.publish = capture_publish  # type: ignore[method-assign]
+
+    # Any trade should be rejected and system should halt
+    await guardian._evaluate_request({
+        "id": "req-001",
+        "market_id": "polymarket:btc-100k",
+        "side": "buy",
+        "outcome": "YES",
+        "amount": "10",
+        "max_price": "0.50",
+    })
+
+    assert len(decisions) == 1
+    assert decisions[0][1]["approved"] is False
+    assert decisions[0][1]["rule_triggered"] == "drawdown_halt"
+    assert guardian._halted is True
+
+
+@pytest.mark.asyncio
+async def test_updates_high_water_mark_on_profit() -> None:
+    """High water mark should ratchet up with profits."""
+    guardian = RiskGuardianAgent(
+        redis_url="redis://localhost:6379",
+        initial_bankroll=Decimal("1000"),
+    )
+
+    assert guardian._high_water_mark == Decimal("1000")
+
+    # Record profit
+    guardian.record_pnl(Decimal("100"))
+
+    assert guardian._current_value == Decimal("1100")
+    assert guardian._high_water_mark == Decimal("1100")
+
+    # Record loss
+    guardian.record_pnl(Decimal("-50"))
+
+    assert guardian._current_value == Decimal("1050")
+    assert guardian._high_water_mark == Decimal("1100")  # Should NOT drop

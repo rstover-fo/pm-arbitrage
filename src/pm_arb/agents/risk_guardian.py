@@ -100,7 +100,24 @@ class RiskGuardianAgent(BaseAgent):
                 rule_triggered="system_halt",
             )
 
-        # Rule 2: Daily loss limit
+        # Rule 2: Drawdown check (halt if exceeded)
+        drawdown_floor = self._high_water_mark * (1 - self._drawdown_limit_pct)
+        if self._current_value < drawdown_floor:
+            self._halted = True
+            logger.critical(
+                "drawdown_halt_triggered",
+                current_value=str(self._current_value),
+                high_water_mark=str(self._high_water_mark),
+                floor=str(drawdown_floor),
+            )
+            return RiskDecision(
+                request_id=request.id,
+                approved=False,
+                reason=f"Drawdown limit exceeded: ${self._current_value} < ${drawdown_floor}",
+                rule_triggered="drawdown_halt",
+            )
+
+        # Rule 3: Daily loss limit
         daily_loss_limit = self._initial_bankroll * self._daily_loss_limit_pct
         if self._daily_pnl < -daily_loss_limit:
             return RiskDecision(
@@ -110,7 +127,7 @@ class RiskGuardianAgent(BaseAgent):
                 rule_triggered="daily_loss_limit",
             )
 
-        # Rule 3: Position limit
+        # Rule 4: Position limit
         position_limit = self._initial_bankroll * self._position_limit_pct
         current_position = self._positions.get(request.market_id, Decimal("0"))
         new_position = current_position + request.amount
@@ -123,7 +140,7 @@ class RiskGuardianAgent(BaseAgent):
                 rule_triggered="position_limit",
             )
 
-        # Rule 4: Platform limit
+        # Rule 5: Platform limit
         platform_limit = self._initial_bankroll * self._platform_limit_pct
         venue = request.market_id.split(":")[0] if ":" in request.market_id else "unknown"
         current_platform = self._platform_exposure.get(venue, Decimal("0"))
@@ -187,3 +204,16 @@ class RiskGuardianAgent(BaseAgent):
         venue = request.market_id.split(":")[0] if ":" in request.market_id else "unknown"
         platform_current = self._platform_exposure.get(venue, Decimal("0"))
         self._platform_exposure[venue] = platform_current + request.amount
+
+    def record_pnl(self, pnl: Decimal) -> None:
+        """Record P&L and update tracking."""
+        self._current_value += pnl
+        self._daily_pnl += pnl
+
+        # Update high water mark if new peak
+        if self._current_value > self._high_water_mark:
+            self._high_water_mark = self._current_value
+            logger.info(
+                "new_high_water_mark",
+                value=str(self._high_water_mark),
+            )
