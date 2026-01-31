@@ -106,8 +106,12 @@ def render_overview(service: DashboardService) -> None:
             st.subheader("Strategy P&L")
             df = pd.DataFrame(strategies)
             fig = px.bar(
-                df, x="strategy", y="total_pnl", color="total_pnl",
-                color_continuous_scale=["red", "green"], color_continuous_midpoint=0
+                df,
+                x="strategy",
+                y="total_pnl",
+                color="total_pnl",
+                color_continuous_scale=["red", "green"],
+                color_continuous_midpoint=0,
             )
             fig.update_layout(margin=dict(t=0, b=0, l=0, r=0), showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
@@ -132,8 +136,15 @@ def render_strategies(service: DashboardService) -> None:
     df["largest_loss"] = df["largest_loss"].apply(lambda x: f"${x:,.2f}")
 
     df.columns = [
-        "Strategy", "Total P&L", "Trades", "Wins", "Losses",
-        "Win Rate", "Largest Win", "Largest Loss", "Allocation"
+        "Strategy",
+        "Total P&L",
+        "Trades",
+        "Wins",
+        "Losses",
+        "Win Rate",
+        "Largest Win",
+        "Largest Loss",
+        "Allocation",
     ]
     st.dataframe(df, use_container_width=True, hide_index=True)
 
@@ -172,7 +183,12 @@ def render_risk(service: DashboardService) -> None:
 
     with col3:
         drawdown_pct = risk["drawdown_pct"] * 100
-        st.metric("Drawdown", f"${risk['drawdown']:,.0f}", delta=f"-{drawdown_pct:.1f}%", delta_color="inverse")
+        st.metric(
+            "Drawdown",
+            f"${risk['drawdown']:,.0f}",
+            delta=f"-{drawdown_pct:.1f}%",
+            delta_color="inverse",
+        )
 
     with col4:
         daily = risk["daily_pnl"]
@@ -186,7 +202,8 @@ def render_risk(service: DashboardService) -> None:
         st.subheader("Position Exposure")
         positions = risk["positions"]
         if positions:
-            pos_df = pd.DataFrame([{"Market": k, "Exposure": f"${v:,.0f}"} for k, v in positions.items()])
+            pos_data = [{"Market": k, "Exposure": f"${v:,.0f}"} for k, v in positions.items()]
+            pos_df = pd.DataFrame(pos_data)
             st.dataframe(pos_df, use_container_width=True, hide_index=True)
         else:
             st.info("No open positions")
@@ -195,7 +212,8 @@ def render_risk(service: DashboardService) -> None:
         st.subheader("Platform Exposure")
         platforms = risk["platform_exposure"]
         if platforms:
-            plat_df = pd.DataFrame([{"Platform": k, "Exposure": f"${v:,.0f}"} for k, v in platforms.items()])
+            plat_data = [{"Platform": k, "Exposure": f"${v:,.0f}"} for k, v in platforms.items()]
+            plat_df = pd.DataFrame(plat_data)
             st.dataframe(plat_df, use_container_width=True, hide_index=True)
         else:
             st.info("No platform exposure")

@@ -2,8 +2,6 @@
 
 from decimal import Decimal
 
-import pytest
-
 from pm_arb.agents.capital_allocator import CapitalAllocatorAgent
 from pm_arb.agents.paper_executor import PaperExecutorAgent
 from pm_arb.agents.risk_guardian import RiskGuardianAgent
