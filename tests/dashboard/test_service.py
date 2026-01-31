@@ -154,3 +154,31 @@ def test_get_recent_trades() -> None:
     assert trades[0]["id"] == "trade-002"
     assert trades[1]["id"] == "trade-001"
     assert trades[0]["amount"] == Decimal("100")
+
+
+def test_create_from_registry() -> None:
+    """Should create service from agent registry."""
+    from pm_arb.core.registry import AgentRegistry
+
+    # Reset registry for clean test
+    AgentRegistry.reset_instance()
+    registry = AgentRegistry()
+
+    allocator = MockCapitalAllocator()
+    allocator.name = "capital-allocator"
+    guardian = MockRiskGuardian()
+    guardian.name = "risk-guardian"
+    executor = MockPaperExecutor()
+    executor.name = "paper-executor"
+
+    registry.register(allocator)
+    registry.register(guardian)
+    registry.register(executor)
+
+    service = DashboardService.from_registry(registry)
+
+    assert service.get_portfolio_summary()["total_capital"] == Decimal("1000")
+    assert len(service.get_recent_trades()) == 2
+
+    # Cleanup
+    AgentRegistry.reset_instance()

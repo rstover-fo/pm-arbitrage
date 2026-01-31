@@ -36,6 +36,20 @@ class ExecutorProtocol(Protocol):
 class DashboardService:
     """Aggregates data from agents for dashboard display."""
 
+    @classmethod
+    def from_registry(cls, registry: Any) -> "DashboardService":
+        """Create service from agent registry."""
+        allocator = registry.get("capital-allocator")
+        guardian = registry.get("risk-guardian")
+        executor = registry.get("paper-executor")
+
+        if not allocator:
+            raise ValueError("capital-allocator not found in registry")
+        if not guardian:
+            raise ValueError("risk-guardian not found in registry")
+
+        return cls(allocator=allocator, guardian=guardian, executor=executor)
+
     def __init__(
         self,
         allocator: AllocatorProtocol,
