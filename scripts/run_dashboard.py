@@ -8,20 +8,31 @@ from pathlib import Path
 
 def main() -> None:
     """Run the Streamlit dashboard."""
-    # Get the path to app.py
     project_root = Path(__file__).parent.parent
-    app_path = project_root / "src" / "pm_arb" / "dashboard" / "app.py"
+
+    # Parse mode argument
+    mode = "mock"
+    if len(sys.argv) > 1 and sys.argv[1] == "--live":
+        mode = "live"
+
+    if mode == "live":
+        app_path = project_root / "src" / "pm_arb" / "dashboard" / "app_live.py"
+        title = "PM Arbitrage Dashboard (Live)"
+    else:
+        app_path = project_root / "src" / "pm_arb" / "dashboard" / "app.py"
+        title = "PM Arbitrage Dashboard (Mock)"
 
     if not app_path.exists():
         print(f"Error: Dashboard app not found at {app_path}")
         sys.exit(1)
 
-    print("🚀 Starting PM Arbitrage Dashboard...")
+    print(f"🚀 Starting {title}...")
     print(f"   App: {app_path}")
     print("   URL: http://localhost:8501")
+    if mode == "live":
+        print("   Note: Requires agents running (python scripts/run_agents.py)")
     print()
 
-    # Run streamlit
     subprocess.run(
         [
             sys.executable,
