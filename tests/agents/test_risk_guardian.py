@@ -89,3 +89,47 @@ async def test_approves_trade_within_position_limit() -> None:
 
     assert len(decisions) == 1
     assert decisions[0][1]["approved"] is True
+
+
+@pytest.mark.asyncio
+async def test_rejects_trade_exceeding_platform_limit() -> None:
+    """Should reject trade that exceeds platform exposure limit."""
+    guardian = RiskGuardianAgent(
+        redis_url="redis://localhost:6379",
+        initial_bankroll=Decimal("1000"),
+        position_limit_pct=Decimal("0.50"),  # High position limit
+        platform_limit_pct=Decimal("0.30"),  # 30% = $300 max per platform
+    )
+
+    decisions: list[tuple[str, dict[str, Any]]] = []
+
+    async def capture_publish(channel: str, data: dict[str, Any]) -> str:
+        decisions.append((channel, data))
+        return "mock-id"
+
+    guardian.publish = capture_publish  # type: ignore[method-assign]
+
+    # First trade: $200 to polymarket (within limit)
+    await guardian._evaluate_request({
+        "id": "req-001",
+        "market_id": "polymarket:btc-100k",
+        "side": "buy",
+        "outcome": "YES",
+        "amount": "200",
+        "max_price": "0.50",
+    })
+
+    # Second trade: $150 more to polymarket (would exceed $300 limit)
+    await guardian._evaluate_request({
+        "id": "req-002",
+        "market_id": "polymarket:eth-5k",
+        "side": "buy",
+        "outcome": "YES",
+        "amount": "150",
+        "max_price": "0.50",
+    })
+
+    assert len(decisions) == 2
+    assert decisions[0][1]["approved"] is True
+    assert decisions[1][1]["approved"] is False
+    assert decisions[1][1]["rule_triggered"] == "platform_limit"

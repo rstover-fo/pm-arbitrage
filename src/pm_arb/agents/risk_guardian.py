@@ -110,6 +110,20 @@ class RiskGuardianAgent(BaseAgent):
                 rule_triggered="position_limit",
             )
 
+        # Rule 3: Platform limit
+        platform_limit = self._initial_bankroll * self._platform_limit_pct
+        venue = request.market_id.split(":")[0] if ":" in request.market_id else "unknown"
+        current_platform = self._platform_exposure.get(venue, Decimal("0"))
+        new_platform = current_platform + request.amount
+
+        if new_platform > platform_limit:
+            return RiskDecision(
+                request_id=request.id,
+                approved=False,
+                reason=f"Platform exposure would exceed limit: ${new_platform} > ${platform_limit}",
+                rule_triggered="platform_limit",
+            )
+
         # All rules passed
         return RiskDecision(
             request_id=request.id,
