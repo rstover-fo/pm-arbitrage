@@ -17,11 +17,13 @@ async def test_oracle_agent_publishes_prices() -> None:
     mock_oracle.name = "test-oracle"
     mock_oracle.connect = AsyncMock()
     mock_oracle.disconnect = AsyncMock()
-    mock_oracle.get_current = AsyncMock(return_value=OracleData(
-        source="test",
-        symbol="BTC",
-        value=Decimal("65000"),
-    ))
+    mock_oracle.get_current = AsyncMock(
+        return_value=OracleData(
+            source="test",
+            symbol="BTC",
+            value=Decimal("65000"),
+        )
+    )
 
     agent = OracleAgent(
         redis_url="redis://localhost:6379",
@@ -32,9 +34,11 @@ async def test_oracle_agent_publishes_prices() -> None:
 
     published = []
     original_publish = agent.publish
+
     async def capture_publish(channel, data):
         published.append((channel, data))
         return await original_publish(channel, data)
+
     agent.publish = capture_publish
 
     task = asyncio.create_task(agent.run())

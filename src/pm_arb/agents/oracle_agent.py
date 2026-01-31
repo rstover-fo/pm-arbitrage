@@ -1,6 +1,7 @@
 """Oracle Agent - streams real-world data from external sources."""
 
 import asyncio
+from typing import Any
 
 import structlog
 
@@ -32,7 +33,7 @@ class OracleAgent(BaseAgent):
         """No subscriptions - this agent only publishes."""
         return []
 
-    async def handle_message(self, channel: str, data: dict) -> None:
+    async def handle_message(self, channel: str, data: dict[str, Any]) -> None:
         """No incoming messages to handle."""
         pass
 

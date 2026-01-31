@@ -4,10 +4,12 @@ import json
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any
 
 import httpx
 import structlog
 import websockets
+from websockets import ClientConnection
 
 from pm_arb.adapters.oracles.base import OracleAdapter
 from pm_arb.core.models import OracleData
@@ -26,7 +28,7 @@ class BinanceOracle(OracleAdapter):
     def __init__(self) -> None:
         super().__init__()
         self._client: httpx.AsyncClient | None = None
-        self._ws: websockets.WebSocketClientProtocol | None = None
+        self._ws: ClientConnection | None = None
         self._subscribed_symbols: list[str] = []
 
     async def connect(self) -> None:
@@ -57,7 +59,7 @@ class BinanceOracle(OracleAdapter):
             timestamp=datetime.now(UTC),
         )
 
-    async def _fetch_price(self, symbol: str) -> dict | None:
+    async def _fetch_price(self, symbol: str) -> dict[str, Any] | None:
         """Fetch price from REST API."""
         if not self._client:
             raise RuntimeError("Not connected")
@@ -69,7 +71,8 @@ class BinanceOracle(OracleAdapter):
                 params={"symbol": ticker},
             )
             response.raise_for_status()
-            return response.json()
+            result: dict[str, Any] = response.json()
+            return result
         except httpx.HTTPError as e:
             logger.error("binance_fetch_error", symbol=symbol, error=str(e))
             return None

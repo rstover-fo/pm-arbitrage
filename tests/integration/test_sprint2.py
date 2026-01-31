@@ -29,15 +29,19 @@ async def test_live_data_streaming() -> None:
     oracle_messages = []
 
     original_venue_publish = venue_agent.publish
+
     async def capture_venue(channel, data):
         venue_messages.append((channel, data))
         return await original_venue_publish(channel, data)
+
     venue_agent.publish = capture_venue
 
     original_oracle_publish = oracle_agent.publish
+
     async def capture_oracle(channel, data):
         oracle_messages.append((channel, data))
         return await original_oracle_publish(channel, data)
+
     oracle_agent.publish = capture_oracle
 
     # Run agents

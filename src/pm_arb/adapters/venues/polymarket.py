@@ -1,6 +1,7 @@
 """Polymarket venue adapter."""
 
 from decimal import Decimal
+from typing import Any
 
 import httpx
 import structlog
@@ -44,7 +45,7 @@ class PolymarketAdapter(VenueAdapter):
         raw_markets = await self._fetch_markets()
         return [self._parse_market(m) for m in raw_markets]
 
-    async def _fetch_markets(self) -> list[dict]:
+    async def _fetch_markets(self) -> list[dict[str, Any]]:
         """Fetch raw market data from API."""
         if not self._client:
             raise RuntimeError("Not connected")
@@ -55,9 +56,10 @@ class PolymarketAdapter(VenueAdapter):
             params={"active": "true", "limit": 100},
         )
         response.raise_for_status()
-        return response.json()
+        result: list[dict[str, Any]] = response.json()
+        return result
 
-    def _parse_market(self, data: dict) -> Market:
+    def _parse_market(self, data: dict[str, Any]) -> Market:
         """Parse API response into Market model."""
         prices = data.get("outcomePrices", ["0.5", "0.5"])
         yes_price = Decimal(str(prices[0])) if prices else Decimal("0.5")
@@ -84,7 +86,4 @@ class PolymarketAdapter(VenueAdapter):
         """Fetch specifically crypto-related markets (BTC up/down, etc.)."""
         markets = await self.get_markets()
         crypto_keywords = ["btc", "bitcoin", "eth", "ethereum", "sol", "solana", "crypto"]
-        return [
-            m for m in markets
-            if any(kw in m.title.lower() for kw in crypto_keywords)
-        ]
+        return [m for m in markets if any(kw in m.title.lower() for kw in crypto_keywords)]

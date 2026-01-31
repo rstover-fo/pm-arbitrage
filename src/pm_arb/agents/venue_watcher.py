@@ -1,6 +1,7 @@
 """Venue Watcher Agent - streams prices from a prediction market venue."""
 
 import asyncio
+from typing import Any
 
 import structlog
 
@@ -30,7 +31,7 @@ class VenueWatcherAgent(BaseAgent):
         """No subscriptions - this agent only publishes."""
         return []
 
-    async def handle_message(self, channel: str, data: dict) -> None:
+    async def handle_message(self, channel: str, data: dict[str, Any]) -> None:
         """No incoming messages to handle."""
         pass
 

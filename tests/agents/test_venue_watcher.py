@@ -17,16 +17,18 @@ async def test_venue_watcher_publishes_prices() -> None:
     mock_adapter.name = "test-venue"
     mock_adapter.connect = AsyncMock()
     mock_adapter.disconnect = AsyncMock()
-    mock_adapter.get_markets = AsyncMock(return_value=[
-        Market(
-            id="test:market1",
-            venue="test",
-            external_id="m1",
-            title="Test Market",
-            yes_price=Decimal("0.50"),
-            no_price=Decimal("0.50"),
-        )
-    ])
+    mock_adapter.get_markets = AsyncMock(
+        return_value=[
+            Market(
+                id="test:market1",
+                venue="test",
+                external_id="m1",
+                title="Test Market",
+                yes_price=Decimal("0.50"),
+                no_price=Decimal("0.50"),
+            )
+        ]
+    )
 
     agent = VenueWatcherAgent(
         redis_url="redis://localhost:6379",
@@ -37,9 +39,11 @@ async def test_venue_watcher_publishes_prices() -> None:
     # Capture published messages
     published = []
     original_publish = agent.publish
+
     async def capture_publish(channel, data):
         published.append((channel, data))
         return await original_publish(channel, data)
+
     agent.publish = capture_publish
 
     # Run agent briefly
