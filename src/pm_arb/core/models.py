@@ -53,6 +53,40 @@ class Market(BaseModel):
     last_updated: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class Outcome(BaseModel):
+    """Single outcome in a multi-outcome market."""
+
+    name: str
+    price: Decimal
+    external_id: str = ""
+
+
+class MultiOutcomeMarket(BaseModel):
+    """A multi-outcome prediction market (e.g., 'Who wins election?')."""
+
+    id: str
+    venue: str
+    external_id: str
+    title: str
+    description: str = ""
+    outcomes: list[Outcome]
+    volume_24h: Decimal = Decimal("0")
+    liquidity: Decimal = Decimal("0")
+    end_date: datetime | None = None
+    last_updated: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @property
+    def price_sum(self) -> Decimal:
+        """Sum of all outcome prices."""
+        return sum(o.price for o in self.outcomes)
+
+    @property
+    def arbitrage_edge(self) -> Decimal:
+        """Potential arbitrage if sum < 1.0."""
+        edge = Decimal("1.0") - self.price_sum
+        return max(Decimal("0"), edge)
+
+
 class OracleData(BaseModel):
     """Real-world data from an oracle source."""
 

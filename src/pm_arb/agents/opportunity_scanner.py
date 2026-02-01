@@ -8,7 +8,7 @@ from uuid import uuid4
 import structlog
 
 from pm_arb.agents.base import BaseAgent
-from pm_arb.core.models import Market, Opportunity, OpportunityType, OracleData
+from pm_arb.core.models import Market, MultiOutcomeMarket, Opportunity, OpportunityType, OracleData, Outcome
 
 logger = structlog.get_logger()
 
@@ -41,6 +41,9 @@ class OpportunityScannerAgent(BaseAgent):
         self._matched_markets: dict[str, list[str]] = {}  # event_id -> [market_ids]
         self._market_to_event: dict[str, str] = {}  # market_id -> event_id
 
+        # Multi-outcome markets
+        self._multi_outcome_markets: dict[str, MultiOutcomeMarket] = {}
+
     def get_subscriptions(self) -> list[str]:
         """Subscribe to venue prices and oracle data."""
         return self._venue_channels + self._oracle_channels
@@ -72,7 +75,9 @@ class OpportunityScannerAgent(BaseAgent):
 
     async def handle_message(self, channel: str, data: dict[str, Any]) -> None:
         """Route messages to appropriate handler."""
-        if channel.startswith("venue."):
+        if channel.startswith("venue.") and channel.endswith(".multi"):
+            await self._handle_multi_outcome_market(channel, data)
+        elif channel.startswith("venue."):
             await self._handle_venue_price(channel, data)
         elif channel.startswith("oracle."):
             await self._handle_oracle_data(channel, data)
@@ -298,6 +303,68 @@ class OpportunityScannerAgent(BaseAgent):
                 "yes_price": str(market.yes_price),
                 "no_price": str(market.no_price),
                 "price_sum": str(price_sum),
+            },
+        )
+
+        await self._publish_opportunity(opportunity)
+
+    async def _handle_multi_outcome_market(
+        self, channel: str, data: dict[str, Any]
+    ) -> None:
+        """Process multi-outcome market update."""
+        market_id = data.get("market_id", "")
+        if not market_id:
+            return
+
+        outcomes = [
+            Outcome(
+                name=o.get("name", ""),
+                price=Decimal(str(o.get("price", "0"))),
+                external_id=o.get("external_id", ""),
+            )
+            for o in data.get("outcomes", [])
+        ]
+
+        market = MultiOutcomeMarket(
+            id=market_id,
+            venue=data.get("venue", ""),
+            external_id=data.get("external_id", market_id),
+            title=data.get("title", ""),
+            outcomes=outcomes,
+        )
+
+        self._multi_outcome_markets[market_id] = market
+        await self._check_multi_outcome_arb(market)
+
+    async def _check_multi_outcome_arb(self, market: MultiOutcomeMarket) -> None:
+        """Check if all outcome prices sum < 1.0.
+
+        This captures the $29M opportunity class from research.
+        """
+        edge = market.arbitrage_edge
+
+        if edge <= 0 or edge < self._min_edge_pct:
+            return
+
+        signal_strength = min(Decimal("1.0"), edge * 5)
+
+        if signal_strength < self._min_signal_strength:
+            return
+
+        opportunity = Opportunity(
+            id=f"opp-{uuid4().hex[:8]}",
+            type=OpportunityType.MISPRICING,
+            markets=[market.id],
+            expected_edge=edge,
+            signal_strength=signal_strength,
+            metadata={
+                "arb_type": "multi_outcome",
+                "outcome_count": len(market.outcomes),
+                "price_sum": str(market.price_sum),
+                "outcomes": [
+                    {"name": o.name, "price": str(o.price)}
+                    for o in market.outcomes
+                ],
             },
         )
 

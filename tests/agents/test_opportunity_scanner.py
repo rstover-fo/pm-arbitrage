@@ -345,3 +345,45 @@ async def test_ignores_fair_priced_market() -> None:
     # Should NOT detect any mispricing (filter out oracle_lag opportunities)
     mispricing_opps = [o for o in opportunities if o["type"] == "mispricing"]
     assert len(mispricing_opps) == 0
+
+
+@pytest.mark.asyncio
+async def test_detects_multi_outcome_arbitrage() -> None:
+    """Should detect when all outcomes sum < 1.0."""
+    scanner = OpportunityScannerAgent(
+        redis_url="redis://localhost:6379",
+        venue_channels=["venue.test.prices"],
+        oracle_channels=[],
+        min_edge_pct=Decimal("0.01"),
+        min_signal_strength=Decimal("0.01"),
+    )
+
+    opportunities: list[dict[str, Any]] = []
+
+    async def capture_publish(channel: str, data: dict[str, Any]) -> str:
+        if channel == "opportunities.detected":
+            opportunities.append(data)
+        return "mock-id"
+
+    scanner.publish = capture_publish  # type: ignore[method-assign]
+
+    # Send multi-outcome market update where sum = 0.88
+    await scanner._handle_multi_outcome_market(
+        "venue.test.multi",
+        {
+            "market_id": "polymarket:election",
+            "venue": "polymarket",
+            "title": "Who wins?",
+            "outcomes": [
+                {"name": "Candidate A", "price": "0.30"},
+                {"name": "Candidate B", "price": "0.28"},
+                {"name": "Candidate C", "price": "0.30"},
+            ],
+        },
+    )
+
+    # Should detect mispricing
+    mispricing_opps = [o for o in opportunities if o["type"] == "mispricing"]
+    assert len(mispricing_opps) >= 1
+    assert mispricing_opps[0]["metadata"]["arb_type"] == "multi_outcome"
+    assert Decimal(mispricing_opps[0]["expected_edge"]) == Decimal("0.12")
