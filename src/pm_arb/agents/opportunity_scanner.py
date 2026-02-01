@@ -116,6 +116,9 @@ class OpportunityScannerAgent(BaseAgent):
 
     async def _scan_for_opportunities(self, market: Market) -> None:
         """Scan for opportunities involving this market."""
+        # Check single-condition mispricing first (YES + NO < 1)
+        await self._check_single_condition_arb(market)
+
         # Check oracle-based opportunities
         if market.id in self._market_thresholds:
             threshold_info = self._market_thresholds[market.id]
@@ -259,6 +262,42 @@ class OpportunityScannerAgent(BaseAgent):
                 "buy_yes_price": str(lowest_price),
                 "buy_no_venue": highest_market.venue,
                 "buy_no_price": str(Decimal("1") - highest_price),
+            },
+        )
+
+        await self._publish_opportunity(opportunity)
+
+    async def _check_single_condition_arb(self, market: Market) -> None:
+        """Check if YES + NO < 1.0 (simple mispricing).
+
+        This captures the $10.5M opportunity class from research.
+        """
+        price_sum = market.yes_price + market.no_price
+
+        # Calculate edge (how much under $1.00)
+        edge = Decimal("1.0") - price_sum
+
+        # Must be positive edge and exceed minimum
+        if edge <= 0 or edge < self._min_edge_pct:
+            return
+
+        # Signal strength proportional to edge (capped at 1.0)
+        signal_strength = min(Decimal("1.0"), edge * 5)
+
+        if signal_strength < self._min_signal_strength:
+            return
+
+        opportunity = Opportunity(
+            id=f"opp-{uuid4().hex[:8]}",
+            type=OpportunityType.MISPRICING,
+            markets=[market.id],
+            expected_edge=edge,
+            signal_strength=signal_strength,
+            metadata={
+                "arb_type": "single_condition",
+                "yes_price": str(market.yes_price),
+                "no_price": str(market.no_price),
+                "price_sum": str(price_sum),
             },
         )
 

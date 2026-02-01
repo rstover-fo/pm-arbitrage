@@ -267,3 +267,81 @@ async def test_filters_low_signal_opportunities() -> None:
 
     # Should NOT publish due to low signal
     assert len(published) == 0
+
+
+@pytest.mark.asyncio
+async def test_detects_single_condition_arbitrage() -> None:
+    """Should detect when YES + NO < 1.0 (mispricing)."""
+    scanner = OpportunityScannerAgent(
+        redis_url="redis://localhost:6379",
+        venue_channels=["venue.test.prices"],
+        oracle_channels=[],
+        min_edge_pct=Decimal("0.01"),  # 1% minimum
+        min_signal_strength=Decimal("0.01"),
+    )
+
+    # Capture published opportunities
+    opportunities: list[dict[str, Any]] = []
+    original_publish = scanner.publish
+
+    async def capture_publish(channel: str, data: dict[str, Any]) -> str:
+        if channel == "opportunities.detected":
+            opportunities.append(data)
+        return "mock-id"
+
+    scanner.publish = capture_publish  # type: ignore[method-assign]
+
+    # Send price update where YES + NO = 0.90 (10% mispricing)
+    await scanner._handle_venue_price(
+        "venue.test.prices",
+        {
+            "market_id": "polymarket:test-market",
+            "venue": "polymarket",
+            "title": "Test Market",
+            "yes_price": "0.45",
+            "no_price": "0.45",  # 0.45 + 0.45 = 0.90
+        },
+    )
+
+    # Should detect mispricing opportunity
+    assert len(opportunities) >= 1
+    opp = opportunities[0]
+    assert opp["type"] == "mispricing"
+    assert Decimal(opp["expected_edge"]) == Decimal("0.10")
+
+
+@pytest.mark.asyncio
+async def test_ignores_fair_priced_market() -> None:
+    """Should not detect arbitrage when YES + NO = 1.0."""
+    scanner = OpportunityScannerAgent(
+        redis_url="redis://localhost:6379",
+        venue_channels=["venue.test.prices"],
+        oracle_channels=[],
+        min_edge_pct=Decimal("0.01"),
+        min_signal_strength=Decimal("0.01"),
+    )
+
+    opportunities: list[dict[str, Any]] = []
+
+    async def capture_publish(channel: str, data: dict[str, Any]) -> str:
+        if channel == "opportunities.detected":
+            opportunities.append(data)
+        return "mock-id"
+
+    scanner.publish = capture_publish  # type: ignore[method-assign]
+
+    # Send fairly priced market (YES + NO = 1.0)
+    await scanner._handle_venue_price(
+        "venue.test.prices",
+        {
+            "market_id": "polymarket:fair-market",
+            "venue": "polymarket",
+            "title": "Fair Market",
+            "yes_price": "0.55",
+            "no_price": "0.45",  # 0.55 + 0.45 = 1.0
+        },
+    )
+
+    # Should NOT detect any mispricing (filter out oracle_lag opportunities)
+    mispricing_opps = [o for o in opportunities if o["type"] == "mispricing"]
+    assert len(mispricing_opps) == 0
