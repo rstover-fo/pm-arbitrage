@@ -1,7 +1,9 @@
 """WebSocket server for real-time dashboard updates."""
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from typing import Any
+
 import structlog
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 logger = structlog.get_logger()
 
@@ -24,7 +26,7 @@ class ConnectionManager:
             self.active_connections.remove(websocket)
         logger.info("websocket_disconnected", total=len(self.active_connections))
 
-    async def broadcast(self, message: dict) -> None:
+    async def broadcast(self, message: dict[str, Any]) -> None:
         """Send message to all connected clients."""
         disconnected = []
         for connection in self.active_connections:
@@ -43,7 +45,7 @@ def create_app() -> FastAPI:
     manager = ConnectionManager()
 
     @app.get("/health")
-    async def health() -> dict:
+    async def health() -> dict[str, Any]:
         return {
             "status": "healthy",
             "connections": len(manager.active_connections),
@@ -60,10 +62,12 @@ def create_app() -> FastAPI:
                     await websocket.send_json({"type": "pong"})
                 elif data.get("type") == "subscribe":
                     # Client subscribing to updates
-                    await websocket.send_json({
-                        "type": "subscribed",
-                        "channels": data.get("channels", []),
-                    })
+                    await websocket.send_json(
+                        {
+                            "type": "subscribed",
+                            "channels": data.get("channels", []),
+                        }
+                    )
 
         except WebSocketDisconnect:
             manager.disconnect(websocket)

@@ -171,18 +171,33 @@ class PaperExecutorAgent(BaseAgent):
 
         snapshot = self.get_state_snapshot()
 
-        client = aioredis.from_url(self._redis_url, decode_responses=True)
+        # Serialize Decimals to strings for JSON
+        serializable_trades = [
+            {
+                **trade,
+                "amount": str(trade["amount"]),
+                "price": str(trade["price"]),
+                "fees": str(trade["fees"]),
+            }
+            for trade in snapshot["recent_trades"][:10]
+        ]
+
+        client = aioredis.from_url(  # type: ignore[no-untyped-call]
+            self._redis_url, decode_responses=True
+        )
         try:
             await client.publish(
                 "trade.results",
-                json.dumps({
-                    "agent": self.name,
-                    "type": "state_update",
-                    "data": {
-                        "trade_count": snapshot["trade_count"],
-                        "recent_trades": snapshot["recent_trades"][:10],
-                    },
-                }),
+                json.dumps(
+                    {
+                        "agent": self.name,
+                        "type": "state_update",
+                        "data": {
+                            "trade_count": snapshot["trade_count"],
+                            "recent_trades": serializable_trades,
+                        },
+                    }
+                ),
             )
         finally:
             await client.aclose()

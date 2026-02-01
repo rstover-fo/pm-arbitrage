@@ -1,6 +1,7 @@
 """Integrated WebSocket application with Redis bridge."""
 
 import asyncio
+from typing import Any
 
 import structlog
 from fastapi import FastAPI
@@ -16,14 +17,16 @@ def create_realtime_app(redis_url: str = "redis://localhost:6379") -> FastAPI:
     app = create_app()
     bridge = RedisBridge(redis_url)
 
-    async def forward_to_websockets(channel: str, data: dict) -> None:
+    async def forward_to_websockets(channel: str, data: dict[str, Any]) -> None:
         """Forward Redis messages to all WebSocket clients."""
         manager: ConnectionManager = app.state.manager
-        await manager.broadcast({
-            "type": "update",
-            "channel": channel,
-            "data": data,
-        })
+        await manager.broadcast(
+            {
+                "type": "update",
+                "channel": channel,
+                "data": data,
+            }
+        )
 
     bridge.on_message = forward_to_websockets
 

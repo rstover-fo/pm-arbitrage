@@ -252,27 +252,31 @@ class CapitalAllocatorAgent(BaseAgent):
 
         snapshot = self.get_state_snapshot()
 
-        client = aioredis.from_url(self._redis_url, decode_responses=True)
+        client = aioredis.from_url(  # type: ignore[no-untyped-call]
+            self._redis_url, decode_responses=True
+        )
         try:
             await client.publish(
                 "agent.updates",
-                json.dumps({
-                    "agent": self.name,
-                    "type": "state_update",
-                    "data": {
-                        "total_capital": str(snapshot["total_capital"]),
-                        "strategies": {
-                            k: {
-                                "total_pnl": str(v["total_pnl"]),
-                                "trades": v["trades"],
-                                "wins": v["wins"],
-                                "losses": v["losses"],
-                                "allocation_pct": str(v["allocation_pct"]),
-                            }
-                            for k, v in snapshot["strategies"].items()
+                json.dumps(
+                    {
+                        "agent": self.name,
+                        "type": "state_update",
+                        "data": {
+                            "total_capital": str(snapshot["total_capital"]),
+                            "strategies": {
+                                k: {
+                                    "total_pnl": str(v["total_pnl"]),
+                                    "trades": v["trades"],
+                                    "wins": v["wins"],
+                                    "losses": v["losses"],
+                                    "allocation_pct": str(v["allocation_pct"]),
+                                }
+                                for k, v in snapshot["strategies"].items()
+                            },
                         },
-                    },
-                }),
+                    }
+                ),
             )
         finally:
             await client.aclose()

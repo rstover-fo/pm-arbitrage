@@ -238,20 +238,24 @@ class RiskGuardianAgent(BaseAgent):
 
         snapshot = self.get_state_snapshot()
 
-        client = aioredis.from_url(self._redis_url, decode_responses=True)
+        client = aioredis.from_url(  # type: ignore[no-untyped-call]
+            self._redis_url, decode_responses=True
+        )
         try:
             await client.publish(
                 "risk.state",
-                json.dumps({
-                    "agent": self.name,
-                    "type": "state_update",
-                    "data": {
-                        "current_value": str(snapshot["current_value"]),
-                        "high_water_mark": str(snapshot["high_water_mark"]),
-                        "daily_pnl": str(snapshot["daily_pnl"]),
-                        "halted": snapshot["halted"],
-                    },
-                }),
+                json.dumps(
+                    {
+                        "agent": self.name,
+                        "type": "state_update",
+                        "data": {
+                            "current_value": str(snapshot["current_value"]),
+                            "high_water_mark": str(snapshot["high_water_mark"]),
+                            "daily_pnl": str(snapshot["daily_pnl"]),
+                            "halted": snapshot["halted"],
+                        },
+                    }
+                ),
             )
         finally:
             await client.aclose()

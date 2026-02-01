@@ -3,6 +3,7 @@
 import asyncio
 import json
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 import redis.asyncio as redis
 import structlog
@@ -27,11 +28,13 @@ class RedisBridge:
         self._client: redis.Redis | None = None
         self._pubsub: redis.client.PubSub | None = None
         self._running = False
-        self.on_message: Callable[[str, dict], Awaitable[None]] | None = None
+        self.on_message: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None
 
     async def run(self) -> None:
         """Start listening for Redis messages."""
-        self._client = redis.from_url(self._redis_url, decode_responses=True)
+        self._client = redis.from_url(  # type: ignore[no-untyped-call]
+            self._redis_url, decode_responses=True
+        )
         self._pubsub = self._client.pubsub()
         self._running = True
 
@@ -71,7 +74,7 @@ class RedisBridge:
         """Clean up connections."""
         if self._pubsub:
             await self._pubsub.unsubscribe()
-            await self._pubsub.aclose()
+            await self._pubsub.aclose()  # type: ignore[no-untyped-call]
         if self._client:
             await self._client.aclose()
         logger.info("redis_bridge_stopped")

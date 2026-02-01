@@ -1,11 +1,9 @@
 """Integration test for Sprint 8: WebSocket Real-Time Updates."""
 
 import asyncio
-import json
 from decimal import Decimal
 
 import pytest
-import redis.asyncio as redis
 
 from pm_arb.agents.capital_allocator import CapitalAllocatorAgent
 from pm_arb.agents.paper_executor import PaperExecutorAgent

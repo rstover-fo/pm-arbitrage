@@ -16,10 +16,14 @@ def get_realtime_data(ws_url: str = "ws://localhost:8000/ws") -> dict[str, Any] 
     try:
         with connect(ws_url, open_timeout=1, close_timeout=1) as websocket:
             # Subscribe to all updates
-            websocket.send(json.dumps({
-                "type": "subscribe",
-                "channels": ["agent.updates", "risk.state", "trade.results"],
-            }))
+            websocket.send(
+                json.dumps(
+                    {
+                        "type": "subscribe",
+                        "channels": ["agent.updates", "risk.state", "trade.results"],
+                    }
+                )
+            )
 
             # Get subscription confirmation
             response = websocket.recv(timeout=1)
@@ -40,6 +44,7 @@ def check_websocket_health(base_url: str = "http://localhost:8000") -> dict[str,
 
     try:
         response = httpx.get(f"{base_url}/health", timeout=2)
-        return response.json()
+        result: dict[str, Any] = response.json()
+        return result
     except Exception as e:
         return {"status": "unhealthy", "error": str(e)}

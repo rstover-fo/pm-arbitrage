@@ -1,7 +1,6 @@
 """Tests for Redis to WebSocket bridge."""
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -27,6 +26,7 @@ async def test_bridge_receives_messages() -> None:
 
     # Publish a test message directly to Redis
     import redis.asyncio as redis
+
     client = redis.from_url("redis://localhost:6379", decode_responses=True)
     await client.publish("agent.updates", '{"test": "data"}')
     await client.aclose()
