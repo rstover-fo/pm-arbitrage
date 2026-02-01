@@ -97,6 +97,9 @@ class PaperExecutorAgent(BaseAgent):
         # Clean up pending request
         del self._pending_requests[request_id]
 
+        # Publish state update for real-time dashboard
+        await self.publish_state_update()
+
     async def _publish_rejection(self, request_id: str, reason: str) -> None:
         """Publish rejection result."""
         await self.publish(

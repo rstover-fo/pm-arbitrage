@@ -117,6 +117,9 @@ class CapitalAllocatorAgent(BaseAgent):
             trades=perf["trades"],
         )
 
+        # Publish state update for real-time dashboard
+        await self.publish_state_update()
+
         # Check if rebalance needed
         self._trades_since_rebalance += 1
         if self._trades_since_rebalance >= self._rebalance_interval:
