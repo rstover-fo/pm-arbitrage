@@ -240,3 +240,36 @@ class CapitalAllocatorAgent(BaseAgent):
             },
             "trades_since_rebalance": self._trades_since_rebalance,
         }
+
+    async def publish_state_update(self) -> None:
+        """Publish current state to Redis pub/sub for real-time dashboard."""
+        import json
+
+        import redis.asyncio as aioredis
+
+        snapshot = self.get_state_snapshot()
+
+        client = aioredis.from_url(self._redis_url, decode_responses=True)
+        try:
+            await client.publish(
+                "agent.updates",
+                json.dumps({
+                    "agent": self.name,
+                    "type": "state_update",
+                    "data": {
+                        "total_capital": str(snapshot["total_capital"]),
+                        "strategies": {
+                            k: {
+                                "total_pnl": str(v["total_pnl"]),
+                                "trades": v["trades"],
+                                "wins": v["wins"],
+                                "losses": v["losses"],
+                                "allocation_pct": str(v["allocation_pct"]),
+                            }
+                            for k, v in snapshot["strategies"].items()
+                        },
+                    },
+                }),
+            )
+        finally:
+            await client.aclose()

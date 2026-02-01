@@ -229,3 +229,29 @@ class RiskGuardianAgent(BaseAgent):
             "platform_exposure": dict(self._platform_exposure),
             "halted": self._halted,
         }
+
+    async def publish_state_update(self) -> None:
+        """Publish current state to Redis pub/sub for real-time dashboard."""
+        import json
+
+        import redis.asyncio as aioredis
+
+        snapshot = self.get_state_snapshot()
+
+        client = aioredis.from_url(self._redis_url, decode_responses=True)
+        try:
+            await client.publish(
+                "risk.state",
+                json.dumps({
+                    "agent": self.name,
+                    "type": "state_update",
+                    "data": {
+                        "current_value": str(snapshot["current_value"]),
+                        "high_water_mark": str(snapshot["high_water_mark"]),
+                        "daily_pnl": str(snapshot["daily_pnl"]),
+                        "halted": snapshot["halted"],
+                    },
+                }),
+            )
+        finally:
+            await client.aclose()

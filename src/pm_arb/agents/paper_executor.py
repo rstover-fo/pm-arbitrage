@@ -159,3 +159,27 @@ class PaperExecutorAgent(BaseAgent):
                 for t in reversed(recent)  # Most recent first
             ],
         }
+
+    async def publish_state_update(self) -> None:
+        """Publish current state to Redis pub/sub for real-time dashboard."""
+        import json
+
+        import redis.asyncio as aioredis
+
+        snapshot = self.get_state_snapshot()
+
+        client = aioredis.from_url(self._redis_url, decode_responses=True)
+        try:
+            await client.publish(
+                "trade.results",
+                json.dumps({
+                    "agent": self.name,
+                    "type": "state_update",
+                    "data": {
+                        "trade_count": snapshot["trade_count"],
+                        "recent_trades": snapshot["recent_trades"][:10],
+                    },
+                }),
+            )
+        finally:
+            await client.aclose()
