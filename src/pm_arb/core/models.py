@@ -158,3 +158,114 @@ class StrategyAllocation(BaseModel):
     total_capital: Decimal
     available_capital: Decimal
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class OrderBookLevel(BaseModel):
+    """Single level in an order book."""
+
+    price: Decimal
+    size: Decimal  # Number of tokens available at this price
+
+
+class OrderBook(BaseModel):
+    """Order book for a market with VWAP calculations."""
+
+    market_id: str
+    bids: list[OrderBookLevel] = Field(default_factory=list)  # Sorted high to low
+    asks: list[OrderBookLevel] = Field(default_factory=list)  # Sorted low to high
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @property
+    def best_bid(self) -> Decimal | None:
+        """Highest bid price."""
+        return self.bids[0].price if self.bids else None
+
+    @property
+    def best_ask(self) -> Decimal | None:
+        """Lowest ask price."""
+        return self.asks[0].price if self.asks else None
+
+    @property
+    def spread(self) -> Decimal | None:
+        """Bid-ask spread."""
+        if self.best_bid is None or self.best_ask is None:
+            return None
+        return self.best_ask - self.best_bid
+
+    def calculate_buy_vwap(self, amount: Decimal) -> Decimal | None:
+        """Calculate volume-weighted average price to buy `amount` tokens.
+
+        Returns None if insufficient liquidity.
+        """
+        if not self.asks:
+            return None
+
+        remaining = amount
+        total_cost = Decimal("0")
+        total_filled = Decimal("0")
+
+        for level in self.asks:
+            fill_size = min(remaining, level.size)
+            total_cost += fill_size * level.price
+            total_filled += fill_size
+            remaining -= fill_size
+
+            if remaining <= 0:
+                break
+
+        if remaining > 0:
+            return None  # Insufficient liquidity
+
+        return total_cost / total_filled
+
+    def calculate_sell_vwap(self, amount: Decimal) -> Decimal | None:
+        """Calculate volume-weighted average price to sell `amount` tokens.
+
+        Returns None if insufficient liquidity.
+        """
+        if not self.bids:
+            return None
+
+        remaining = amount
+        total_proceeds = Decimal("0")
+        total_filled = Decimal("0")
+
+        for level in self.bids:
+            fill_size = min(remaining, level.size)
+            total_proceeds += fill_size * level.price
+            total_filled += fill_size
+            remaining -= fill_size
+
+            if remaining <= 0:
+                break
+
+        if remaining > 0:
+            return None
+
+        return total_proceeds / total_filled
+
+    def available_liquidity_at_price(
+        self, max_price: Decimal, side: str
+    ) -> Decimal:
+        """Total tokens available up to max_price.
+
+        Args:
+            max_price: Maximum price willing to pay (buy) or minimum to receive (sell)
+            side: "buy" or "sell"
+        """
+        total = Decimal("0")
+
+        if side == "buy":
+            for level in self.asks:
+                if level.price <= max_price:
+                    total += level.size
+                else:
+                    break
+        else:
+            for level in self.bids:
+                if level.price >= max_price:
+                    total += level.size
+                else:
+                    break
+
+        return total
