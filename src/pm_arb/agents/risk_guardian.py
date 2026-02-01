@@ -160,10 +160,11 @@ class RiskGuardianAgent(BaseAgent):
         # Rule 6: Minimum profit threshold
         expected_profit = request.amount * request.expected_edge
         if expected_profit < self._min_profit_threshold:
+            min_thresh = self._min_profit_threshold
             return RiskDecision(
                 request_id=request.id,
                 approved=False,
-                reason=f"Expected profit ${expected_profit} below minimum ${self._min_profit_threshold}",
+                reason=f"Expected profit ${expected_profit} below minimum ${min_thresh}",
                 rule_triggered="minimum_profit",
             )
 

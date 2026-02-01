@@ -78,7 +78,7 @@ class MultiOutcomeMarket(BaseModel):
     @property
     def price_sum(self) -> Decimal:
         """Sum of all outcome prices."""
-        return sum(o.price for o in self.outcomes)
+        return sum((o.price for o in self.outcomes), start=Decimal("0"))
 
     @property
     def arbitrage_edge(self) -> Decimal:
@@ -279,9 +279,7 @@ class OrderBook(BaseModel):
 
         return total_proceeds / total_filled
 
-    def available_liquidity_at_price(
-        self, max_price: Decimal, side: str
-    ) -> Decimal:
+    def available_liquidity_at_price(self, max_price: Decimal, side: str) -> Decimal:
         """Total tokens available up to max_price.
 
         Args:

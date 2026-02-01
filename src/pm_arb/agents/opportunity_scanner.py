@@ -8,7 +8,14 @@ from uuid import uuid4
 import structlog
 
 from pm_arb.agents.base import BaseAgent
-from pm_arb.core.models import Market, MultiOutcomeMarket, Opportunity, OpportunityType, OracleData, Outcome
+from pm_arb.core.models import (
+    Market,
+    MultiOutcomeMarket,
+    Opportunity,
+    OpportunityType,
+    OracleData,
+    Outcome,
+)
 
 logger = structlog.get_logger()
 
@@ -308,9 +315,7 @@ class OpportunityScannerAgent(BaseAgent):
 
         await self._publish_opportunity(opportunity)
 
-    async def _handle_multi_outcome_market(
-        self, channel: str, data: dict[str, Any]
-    ) -> None:
+    async def _handle_multi_outcome_market(self, channel: str, data: dict[str, Any]) -> None:
         """Process multi-outcome market update."""
         market_id = data.get("market_id", "")
         if not market_id:
@@ -361,10 +366,7 @@ class OpportunityScannerAgent(BaseAgent):
                 "arb_type": "multi_outcome",
                 "outcome_count": len(market.outcomes),
                 "price_sum": str(market.price_sum),
-                "outcomes": [
-                    {"name": o.name, "price": str(o.price)}
-                    for o in market.outcomes
-                ],
+                "outcomes": [{"name": o.name, "price": str(o.price)} for o in market.outcomes],
             },
         )
 

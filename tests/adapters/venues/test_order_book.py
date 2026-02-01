@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from pm_arb.adapters.venues.polymarket import PolymarketAdapter
-from pm_arb.core.models import OrderBook
 
 
 @pytest.mark.asyncio

@@ -2,8 +2,6 @@
 
 from decimal import Decimal
 
-import pytest
-
 from pm_arb.core.models import OrderBook, OrderBookLevel
 
 

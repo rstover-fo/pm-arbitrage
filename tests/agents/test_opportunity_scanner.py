@@ -282,7 +282,6 @@ async def test_detects_single_condition_arbitrage() -> None:
 
     # Capture published opportunities
     opportunities: list[dict[str, Any]] = []
-    original_publish = scanner.publish
 
     async def capture_publish(channel: str, data: dict[str, Any]) -> str:
         if channel == "opportunities.detected":
