@@ -240,6 +240,17 @@ def render_system(service: DashboardService) -> None:
         for agent in agents:
             st.write(f"✓ {agent}")
 
+        st.subheader("Real-Time Connection")
+        from pm_arb.dashboard.websocket_client import check_websocket_health
+
+        ws_health = check_websocket_health()
+        if ws_health.get("status") == "healthy":
+            connections = ws_health.get("connections", 0)
+            st.success(f"🟢 WebSocket Server Running ({connections} clients)")
+        else:
+            st.warning("🟡 WebSocket Server Not Running")
+            st.caption("Start with: `python scripts/run_websocket.py`")
+
     with col2:
         st.subheader("Controls")
         if st.button("🛑 HALT ALL", type="primary"):
