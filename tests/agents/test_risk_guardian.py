@@ -87,6 +87,7 @@ async def test_approves_trade_within_position_limit() -> None:
             "outcome": "YES",
             "amount": "80",
             "max_price": "0.50",
+            "expected_edge": "0.05",  # 5% edge = $4 profit (above $0.05 min)
         }
     )
 
@@ -121,6 +122,7 @@ async def test_rejects_trade_exceeding_platform_limit() -> None:
             "outcome": "YES",
             "amount": "200",
             "max_price": "0.50",
+            "expected_edge": "0.05",  # 5% edge = $10 profit
         }
     )
 
@@ -133,6 +135,7 @@ async def test_rejects_trade_exceeding_platform_limit() -> None:
             "outcome": "YES",
             "amount": "150",
             "max_price": "0.50",
+            "expected_edge": "0.05",  # 5% edge = $7.50 profit
         }
     )
 
@@ -211,6 +214,7 @@ async def test_resets_daily_loss_on_new_day() -> None:
             "outcome": "YES",
             "amount": "10",
             "max_price": "0.50",
+            "expected_edge": "0.10",  # 10% edge = $1 profit
         }
     )
 
@@ -278,3 +282,62 @@ async def test_updates_high_water_mark_on_profit() -> None:
 
     assert guardian._current_value == Decimal("1050")
     assert guardian._high_water_mark == Decimal("1100")  # Should NOT drop
+
+
+@pytest.mark.asyncio
+async def test_rejects_below_minimum_profit() -> None:
+    """Should reject trades with expected profit below threshold."""
+    from pm_arb.core.models import Side, TradeRequest
+
+    guardian = RiskGuardianAgent(
+        redis_url="redis://localhost:6379",
+        initial_bankroll=Decimal("500"),
+        min_profit_threshold=Decimal("0.05"),  # $0.05 minimum
+    )
+
+    # Small trade with small edge = below threshold
+    request = TradeRequest(
+        id="req-001",
+        opportunity_id="opp-001",
+        strategy="test",
+        market_id="polymarket:test",
+        side=Side.BUY,
+        outcome="YES",
+        amount=Decimal("1.00"),  # $1 trade
+        max_price=Decimal("0.50"),
+        expected_edge=Decimal("0.02"),  # 2% edge = $0.02 profit
+    )
+
+    decision = await guardian._check_rules(request)
+
+    assert decision.approved is False
+    assert decision.rule_triggered == "minimum_profit"
+
+
+@pytest.mark.asyncio
+async def test_approves_above_minimum_profit() -> None:
+    """Should approve trades with expected profit above threshold."""
+    from pm_arb.core.models import Side, TradeRequest
+
+    guardian = RiskGuardianAgent(
+        redis_url="redis://localhost:6379",
+        initial_bankroll=Decimal("500"),
+        min_profit_threshold=Decimal("0.05"),
+    )
+
+    # Larger trade with good edge = above threshold
+    request = TradeRequest(
+        id="req-002",
+        opportunity_id="opp-002",
+        strategy="test",
+        market_id="polymarket:test",
+        side=Side.BUY,
+        outcome="YES",
+        amount=Decimal("10.00"),  # $10 trade
+        max_price=Decimal("0.50"),
+        expected_edge=Decimal("0.02"),  # 2% edge = $0.20 profit
+    )
+
+    decision = await guardian._check_rules(request)
+
+    assert decision.approved is True

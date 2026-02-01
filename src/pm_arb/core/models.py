@@ -123,6 +123,7 @@ class TradeRequest(BaseModel):
     outcome: str  # YES or NO
     amount: Decimal  # In dollars
     max_price: Decimal  # Max price willing to pay
+    expected_edge: Decimal = Decimal("0")  # Expected profit percentage
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 

@@ -24,6 +24,7 @@ class RiskGuardianAgent(BaseAgent):
         platform_limit_pct: Decimal = Decimal("0.50"),  # 50% per platform
         daily_loss_limit_pct: Decimal = Decimal("0.10"),  # 10% daily loss
         drawdown_limit_pct: Decimal = Decimal("0.20"),  # 20% from peak
+        min_profit_threshold: Decimal = Decimal("0.05"),  # $0.05 minimum profit
     ) -> None:
         self.name = "risk-guardian"
         super().__init__(redis_url)
@@ -34,6 +35,7 @@ class RiskGuardianAgent(BaseAgent):
         self._platform_limit_pct = platform_limit_pct
         self._daily_loss_limit_pct = daily_loss_limit_pct
         self._drawdown_limit_pct = drawdown_limit_pct
+        self._min_profit_threshold = min_profit_threshold
 
         # State tracking
         self._high_water_mark = initial_bankroll
@@ -81,6 +83,7 @@ class RiskGuardianAgent(BaseAgent):
                 outcome=data.get("outcome", "YES"),
                 amount=Decimal(str(data.get("amount", "0"))),
                 max_price=Decimal(str(data.get("max_price", "1"))),
+                expected_edge=Decimal(str(data.get("expected_edge", "0"))),
             )
         except Exception as e:
             logger.error("invalid_trade_request", error=str(e), data=data)
@@ -152,6 +155,16 @@ class RiskGuardianAgent(BaseAgent):
                 approved=False,
                 reason=f"Platform exposure would exceed limit: ${new_platform} > ${platform_limit}",
                 rule_triggered="platform_limit",
+            )
+
+        # Rule 6: Minimum profit threshold
+        expected_profit = request.amount * request.expected_edge
+        if expected_profit < self._min_profit_threshold:
+            return RiskDecision(
+                request_id=request.id,
+                approved=False,
+                reason=f"Expected profit ${expected_profit} below minimum ${self._min_profit_threshold}",
+                rule_triggered="minimum_profit",
             )
 
         # All rules passed
