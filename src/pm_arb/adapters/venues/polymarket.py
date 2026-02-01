@@ -7,7 +7,7 @@ import httpx
 import structlog
 
 from pm_arb.adapters.venues.base import VenueAdapter
-from pm_arb.core.models import Market
+from pm_arb.core.models import Market, OrderBook, OrderBookLevel
 
 logger = structlog.get_logger()
 
@@ -87,3 +87,71 @@ class PolymarketAdapter(VenueAdapter):
         markets = await self.get_markets()
         crypto_keywords = ["btc", "bitcoin", "eth", "ethereum", "sol", "solana", "crypto"]
         return [m for m in markets if any(kw in m.title.lower() for kw in crypto_keywords)]
+
+    async def get_order_book(
+        self,
+        market_id: str,
+        outcome: str,
+    ) -> OrderBook | None:
+        """Fetch order book from CLOB API."""
+        raw_book = await self._fetch_order_book(market_id, outcome)
+        if not raw_book:
+            return None
+        return self._parse_order_book(market_id, raw_book)
+
+    async def _fetch_order_book(
+        self,
+        market_id: str,
+        outcome: str,
+    ) -> dict[str, Any] | None:
+        """Fetch raw order book from CLOB API."""
+        if not self._client:
+            raise RuntimeError("Not connected")
+
+        # Extract token ID from market (would need actual token ID lookup)
+        # For now, use market_id as placeholder
+        external_id = market_id.split(":")[-1] if ":" in market_id else market_id
+
+        try:
+            response = await self._client.get(
+                f"{CLOB_API}/book",
+                params={"token_id": external_id},
+            )
+            response.raise_for_status()
+            result: dict[str, Any] = response.json()
+            return result
+        except httpx.HTTPError as e:
+            logger.error("order_book_fetch_error", market=market_id, error=str(e))
+            return None
+
+    def _parse_order_book(
+        self,
+        market_id: str,
+        data: dict[str, Any],
+    ) -> OrderBook:
+        """Parse CLOB API response into OrderBook model."""
+        bids = [
+            OrderBookLevel(
+                price=Decimal(str(b["price"])),
+                size=Decimal(str(b["size"])),
+            )
+            for b in data.get("bids", [])
+        ]
+
+        asks = [
+            OrderBookLevel(
+                price=Decimal(str(a["price"])),
+                size=Decimal(str(a["size"])),
+            )
+            for a in data.get("asks", [])
+        ]
+
+        # Sort: bids high to low, asks low to high
+        bids.sort(key=lambda x: x.price, reverse=True)
+        asks.sort(key=lambda x: x.price)
+
+        return OrderBook(
+            market_id=market_id,
+            bids=bids,
+            asks=asks,
+        )

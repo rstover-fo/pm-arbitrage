@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from decimal import Decimal
 
-from pm_arb.core.models import Market, Trade, TradeRequest
+from pm_arb.core.models import Market, OrderBook, Trade, TradeRequest
 
 
 class VenueAdapter(ABC):
@@ -48,3 +48,11 @@ class VenueAdapter(ABC):
     async def get_balance(self) -> Decimal:
         """Get account balance. Override in subclass."""
         raise NotImplementedError(f"{self.name} does not support balance queries")
+
+    async def get_order_book(
+        self,
+        market_id: str,
+        outcome: str,
+    ) -> OrderBook | None:
+        """Fetch order book for a market/outcome. Override in subclass."""
+        raise NotImplementedError(f"{self.name} does not support order book queries")
