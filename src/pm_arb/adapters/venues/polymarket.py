@@ -7,7 +7,15 @@ import httpx
 import structlog
 
 from pm_arb.adapters.venues.base import VenueAdapter
-from pm_arb.core.models import Market, Order, OrderBook, OrderBookLevel, OrderStatus, OrderType, Side
+from pm_arb.core.models import (
+    Market,
+    Order,
+    OrderBook,
+    OrderBookLevel,
+    OrderStatus,
+    OrderType,
+    Side,
+)
 
 logger = structlog.get_logger()
 
@@ -23,8 +31,8 @@ try:
     HAS_CLOB_CLIENT = True
 except ImportError:
     HAS_CLOB_CLIENT = False
-    ClobClient = None  # type: ignore[misc, assignment]
-    ApiCreds = None  # type: ignore[misc, assignment]
+    ClobClient = None
+    ApiCreds = None
 
 
 class PolymarketAdapter(VenueAdapter):
@@ -212,7 +220,7 @@ class PolymarketAdapter(VenueAdapter):
             asks=asks,
         )
 
-    async def place_order(
+    async def place_order(  # type: ignore[override]
         self,
         token_id: str,
         side: Side,
@@ -353,7 +361,7 @@ class PolymarketAdapter(VenueAdapter):
 
         try:
             result = self._clob_client.cancel(order_id)
-            return result.get("success", False)
+            return bool(result.get("success", False))
         except Exception as e:
             logger.error("order_cancel_failed", order_id=order_id, error=str(e))
             return False

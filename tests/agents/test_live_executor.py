@@ -8,7 +8,7 @@ import pytest
 
 from pm_arb.agents.live_executor import LiveExecutorAgent
 from pm_arb.core.auth import PolymarketCredentials
-from pm_arb.core.models import OrderStatus, Side
+from pm_arb.core.models import OrderStatus
 
 
 @pytest.fixture
@@ -52,14 +52,16 @@ async def test_executor_processes_approved_trade(mock_credentials: PolymarketCre
         mock_adapter.place_order.return_value = mock_order_response
         mock_get_adapter.return_value = mock_adapter
 
-        await executor._execute_trade({
-            "request_id": "req-001",
-            "market_id": "polymarket:test-market",
-            "token_id": "token-abc",
-            "side": "buy",
-            "amount": "10",
-            "max_price": "0.55",
-        })
+        await executor._execute_trade(
+            {
+                "request_id": "req-001",
+                "market_id": "polymarket:test-market",
+                "token_id": "token-abc",
+                "side": "buy",
+                "amount": "10",
+                "max_price": "0.55",
+            }
+        )
 
     # Should publish trade result
     assert len(results) == 1
@@ -97,14 +99,16 @@ async def test_executor_reports_failure(mock_credentials: PolymarketCredentials)
         mock_adapter.place_order.return_value = mock_order_response
         mock_get_adapter.return_value = mock_adapter
 
-        await executor._execute_trade({
-            "request_id": "req-002",
-            "market_id": "polymarket:test",
-            "token_id": "token-xyz",
-            "side": "buy",
-            "amount": "100",
-            "max_price": "0.50",
-        })
+        await executor._execute_trade(
+            {
+                "request_id": "req-002",
+                "market_id": "polymarket:test",
+                "token_id": "token-xyz",
+                "side": "buy",
+                "amount": "100",
+                "max_price": "0.50",
+            }
+        )
 
     assert len(results) == 1
     assert results[0][1]["status"] == "rejected"
@@ -112,7 +116,9 @@ async def test_executor_reports_failure(mock_credentials: PolymarketCredentials)
 
 
 @pytest.mark.asyncio
-async def test_executor_subscribes_to_approved_trades(mock_credentials: PolymarketCredentials) -> None:
+async def test_executor_subscribes_to_approved_trades(
+    mock_credentials: PolymarketCredentials,
+) -> None:
     """Executor should subscribe to approved trade channel."""
     executor = LiveExecutorAgent(
         redis_url="redis://localhost:6379",
@@ -125,7 +131,9 @@ async def test_executor_subscribes_to_approved_trades(mock_credentials: Polymark
 
 
 @pytest.mark.asyncio
-async def test_executor_connects_adapter_when_needed(mock_credentials: PolymarketCredentials) -> None:
+async def test_executor_connects_adapter_when_needed(
+    mock_credentials: PolymarketCredentials,
+) -> None:
     """Executor should connect adapter if not already connected."""
     executor = LiveExecutorAgent(
         redis_url="redis://localhost:6379",
@@ -153,14 +161,16 @@ async def test_executor_connects_adapter_when_needed(mock_credentials: Polymarke
         mock_adapter.place_order.return_value = mock_order_response
         mock_get_adapter.return_value = mock_adapter
 
-        await executor._execute_trade({
-            "request_id": "req-003",
-            "market_id": "polymarket:test",
-            "token_id": "token-abc",
-            "side": "buy",
-            "amount": "10",
-            "max_price": "0.55",
-        })
+        await executor._execute_trade(
+            {
+                "request_id": "req-003",
+                "market_id": "polymarket:test",
+                "token_id": "token-abc",
+                "side": "buy",
+                "amount": "10",
+                "max_price": "0.55",
+            }
+        )
 
         # Should have called connect()
         mock_adapter.connect.assert_called_once()
@@ -188,14 +198,16 @@ async def test_executor_handles_exception(mock_credentials: PolymarketCredential
         mock_adapter.place_order.side_effect = Exception("Network timeout")
         mock_get_adapter.return_value = mock_adapter
 
-        await executor._execute_trade({
-            "request_id": "req-004",
-            "market_id": "polymarket:test",
-            "token_id": "token-abc",
-            "side": "buy",
-            "amount": "10",
-            "max_price": "0.55",
-        })
+        await executor._execute_trade(
+            {
+                "request_id": "req-004",
+                "market_id": "polymarket:test",
+                "token_id": "token-abc",
+                "side": "buy",
+                "amount": "10",
+                "max_price": "0.55",
+            }
+        )
 
     assert len(results) == 1
     assert results[0][1]["status"] == "rejected"

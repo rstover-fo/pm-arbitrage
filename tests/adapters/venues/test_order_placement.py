@@ -7,7 +7,7 @@ import pytest
 
 from pm_arb.adapters.venues.polymarket import PolymarketAdapter
 from pm_arb.core.auth import PolymarketCredentials
-from pm_arb.core.models import Order, OrderStatus, OrderType, Side
+from pm_arb.core.models import OrderStatus, OrderType, Side
 
 
 @pytest.fixture

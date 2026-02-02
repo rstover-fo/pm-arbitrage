@@ -72,6 +72,12 @@ def load_credentials(venue: str) -> PolymarketCredentials:
     if missing:
         raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
 
+    # Type assertions for mypy (values verified non-None above)
+    assert api_key is not None
+    assert secret is not None
+    assert passphrase is not None
+    assert private_key is not None
+
     return PolymarketCredentials(
         api_key=api_key,
         secret=secret,

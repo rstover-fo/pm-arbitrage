@@ -58,5 +58,6 @@ module = [
     "pandas.*",
     "plotly.*",
     "streamlit.*",
+    "py_clob_client.*",
 ]
 ignore_missing_imports = true

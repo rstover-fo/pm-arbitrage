@@ -79,8 +79,22 @@ async def test_get_open_orders(mock_credentials: PolymarketCredentials) -> None:
     adapter = PolymarketAdapter(credentials=mock_credentials)
 
     mock_response = [
-        {"orderID": "order-1", "status": "LIVE", "filledAmount": "0", "tokenID": "token-a", "side": "BUY", "size": "10"},
-        {"orderID": "order-2", "status": "LIVE", "filledAmount": "5", "tokenID": "token-b", "side": "SELL", "size": "20"},
+        {
+            "orderID": "order-1",
+            "status": "LIVE",
+            "filledAmount": "0",
+            "tokenID": "token-a",
+            "side": "BUY",
+            "size": "10",
+        },
+        {
+            "orderID": "order-2",
+            "status": "LIVE",
+            "filledAmount": "5",
+            "tokenID": "token-b",
+            "side": "SELL",
+            "size": "20",
+        },
     ]
 
     with (

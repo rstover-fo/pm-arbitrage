@@ -10,18 +10,22 @@ from pm_arb.core.auth import PolymarketCredentials, load_credentials
 
 def test_credentials_from_env() -> None:
     """Should load credentials from environment variables."""
-    with patch.dict(os.environ, {
-        "POLYMARKET_API_KEY": "test-api-key",
-        "POLYMARKET_SECRET": "test-secret",
-        "POLYMARKET_PASSPHRASE": "test-passphrase",
-        "POLYMARKET_PRIVATE_KEY": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
-    }):
+    private_key = "0x" + "1234567890abcdef" * 4
+    with patch.dict(
+        os.environ,
+        {
+            "POLYMARKET_API_KEY": "test-api-key",
+            "POLYMARKET_SECRET": "test-secret",
+            "POLYMARKET_PASSPHRASE": "test-passphrase",
+            "POLYMARKET_PRIVATE_KEY": private_key,
+        },
+    ):
         creds = load_credentials("polymarket")
 
     assert creds.api_key == "test-api-key"
     assert creds.secret == "test-secret"
     assert creds.passphrase == "test-passphrase"
-    assert creds.private_key == "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+    assert creds.private_key == private_key
 
 
 def test_credentials_validates_private_key() -> None:
