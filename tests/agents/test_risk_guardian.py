@@ -341,3 +341,118 @@ async def test_approves_above_minimum_profit() -> None:
     decision = await guardian._check_rules(request)
 
     assert decision.approved is True
+
+
+@pytest.mark.asyncio
+async def test_rejects_high_slippage_trade() -> None:
+    """Should reject trades where slippage exceeds 50% of edge."""
+    from pm_arb.core.models import OrderBook, OrderBookLevel, Side, TradeRequest
+
+    guardian = RiskGuardianAgent(
+        redis_url="redis://localhost:6379",
+        initial_bankroll=Decimal("500"),
+    )
+
+    # Create order book with thin liquidity
+    order_book = OrderBook(
+        market_id="polymarket:test",
+        asks=[
+            OrderBookLevel(price=Decimal("0.50"), size=Decimal("5")),
+            OrderBookLevel(price=Decimal("0.70"), size=Decimal("100")),  # Big price jump
+        ],
+    )
+
+    # Request to buy 20 tokens with 10% edge
+    request = TradeRequest(
+        id="req-001",
+        opportunity_id="opp-001",
+        strategy="test",
+        market_id="polymarket:test",
+        side=Side.BUY,
+        outcome="YES",
+        amount=Decimal("20"),  # Need to go into 2nd level
+        max_price=Decimal("0.55"),  # Willing to pay up to 0.55
+        expected_edge=Decimal("0.10"),
+    )
+
+    decision = await guardian._check_slippage(request, order_book)
+
+    # VWAP = (5*0.50 + 15*0.70) / 20 = 13 / 20 = 0.65
+    # Slippage = 0.65 - 0.55 = 0.10 (100% of edge)
+    assert decision.approved is False
+    assert decision.rule_triggered == "slippage_guard"
+
+
+@pytest.mark.asyncio
+async def test_approves_low_slippage_trade() -> None:
+    """Should approve trades with acceptable slippage."""
+    from pm_arb.core.models import OrderBook, OrderBookLevel, Side, TradeRequest
+
+    guardian = RiskGuardianAgent(
+        redis_url="redis://localhost:6379",
+        initial_bankroll=Decimal("500"),
+    )
+
+    # Deep order book with tight spreads
+    order_book = OrderBook(
+        market_id="polymarket:test",
+        asks=[
+            OrderBookLevel(price=Decimal("0.50"), size=Decimal("100")),
+            OrderBookLevel(price=Decimal("0.51"), size=Decimal("100")),
+        ],
+    )
+
+    request = TradeRequest(
+        id="req-002",
+        opportunity_id="opp-002",
+        strategy="test",
+        market_id="polymarket:test",
+        side=Side.BUY,
+        outcome="YES",
+        amount=Decimal("20"),  # Easily fills at first level
+        max_price=Decimal("0.55"),
+        expected_edge=Decimal("0.10"),
+    )
+
+    decision = await guardian._check_slippage(request, order_book)
+
+    # VWAP = 0.50 (all fills at first level)
+    # Slippage = 0.50 - 0.55 = -0.05 (negative = better than expected)
+    assert decision.approved is True
+
+
+@pytest.mark.asyncio
+async def test_rejects_insufficient_liquidity() -> None:
+    """Should reject trades when order book has insufficient liquidity."""
+    from pm_arb.core.models import OrderBook, OrderBookLevel, Side, TradeRequest
+
+    guardian = RiskGuardianAgent(
+        redis_url="redis://localhost:6379",
+        initial_bankroll=Decimal("500"),
+    )
+
+    # Shallow order book
+    order_book = OrderBook(
+        market_id="polymarket:test",
+        asks=[
+            OrderBookLevel(price=Decimal("0.50"), size=Decimal("5")),
+        ],
+    )
+
+    request = TradeRequest(
+        id="req-003",
+        opportunity_id="opp-003",
+        strategy="test",
+        market_id="polymarket:test",
+        side=Side.BUY,
+        outcome="YES",
+        amount=Decimal("100"),  # Much more than available
+        max_price=Decimal("0.55"),
+        expected_edge=Decimal("0.10"),
+    )
+
+    decision = await guardian._check_slippage(request, order_book)
+
+    assert decision.approved is False
+    assert decision.rule_triggered == "slippage_guard"
+    assert "Insufficient liquidity" in decision.reason

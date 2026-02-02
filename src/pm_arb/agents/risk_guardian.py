@@ -8,7 +8,7 @@ from uuid import uuid4
 import structlog
 
 from pm_arb.agents.base import BaseAgent
-from pm_arb.core.models import RiskDecision, Side, TradeRequest
+from pm_arb.core.models import OrderBook, RiskDecision, Side, TradeRequest
 
 logger = structlog.get_logger()
 
@@ -273,3 +273,60 @@ class RiskGuardianAgent(BaseAgent):
             )
         finally:
             await client.aclose()
+
+    async def _check_slippage(
+        self,
+        request: TradeRequest,
+        order_book: OrderBook,
+    ) -> RiskDecision:
+        """Check if estimated slippage exceeds edge threshold.
+
+        Rejects if slippage > 50% of expected edge.
+
+        Args:
+            request: The trade request
+            order_book: Current order book for the market
+
+        Returns:
+            RiskDecision approving or rejecting the trade
+        """
+        if request.side == Side.BUY:
+            vwap = order_book.calculate_buy_vwap(request.amount)
+        else:
+            vwap = order_book.calculate_sell_vwap(request.amount)
+
+        if vwap is None:
+            return RiskDecision(
+                request_id=request.id,
+                approved=False,
+                reason="Insufficient liquidity for requested amount",
+                rule_triggered="slippage_guard",
+            )
+
+        # Calculate slippage vs expected price
+        slippage = vwap - request.max_price
+
+        # Allow negative slippage (better than expected)
+        if slippage <= 0:
+            return RiskDecision(
+                request_id=request.id,
+                approved=True,
+                reason="Slippage acceptable (better than expected)",
+            )
+
+        # Check if slippage exceeds 50% of edge
+        max_allowed_slippage = request.expected_edge * Decimal("0.5")
+
+        if slippage > max_allowed_slippage:
+            return RiskDecision(
+                request_id=request.id,
+                approved=False,
+                reason=f"Slippage {slippage} exceeds 50% of edge ({max_allowed_slippage})",
+                rule_triggered="slippage_guard",
+            )
+
+        return RiskDecision(
+            request_id=request.id,
+            approved=True,
+            reason=f"Slippage {slippage} within acceptable range",
+        )
