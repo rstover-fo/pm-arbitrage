@@ -15,30 +15,86 @@ logger = structlog.get_logger()
 GAMMA_API = "https://gamma-api.polymarket.com"
 CLOB_API = "https://clob.polymarket.com"
 
+# Optional: Import CLOB client if available
+try:
+    from py_clob_client.client import ClobClient
+    from py_clob_client.clob_types import ApiCreds
+
+    HAS_CLOB_CLIENT = True
+except ImportError:
+    HAS_CLOB_CLIENT = False
+    ClobClient = None  # type: ignore[misc, assignment]
+    ApiCreds = None  # type: ignore[misc, assignment]
+
 
 class PolymarketAdapter(VenueAdapter):
     """Adapter for Polymarket prediction market."""
 
     name = "polymarket"
 
-    def __init__(self, api_key: str = "", private_key: str = "") -> None:
+    def __init__(
+        self,
+        credentials: Any | None = None,  # PolymarketCredentials
+        api_key: str = "",
+        private_key: str = "",
+    ) -> None:
         super().__init__()
+        self._credentials = credentials
         self._api_key = api_key
         self._private_key = private_key
         self._client: httpx.AsyncClient | None = None
+        self._clob_client: Any = None  # ClobClient instance
+        self._is_authenticated = False
+
+    @property
+    def is_authenticated(self) -> bool:
+        """Whether authenticated for trading."""
+        return self._is_authenticated
 
     async def connect(self) -> None:
-        """Initialize HTTP client."""
+        """Initialize HTTP client and optionally CLOB client."""
         self._client = httpx.AsyncClient(timeout=30.0)
         self._connected = True
-        logger.info("polymarket_connected")
+
+        # Initialize CLOB client if credentials provided
+        if self._credentials and HAS_CLOB_CLIENT:
+            try:
+                creds = ApiCreds(
+                    api_key=self._credentials.api_key,
+                    api_secret=self._credentials.secret,
+                    api_passphrase=self._credentials.passphrase,
+                )
+                self._clob_client = ClobClient(
+                    host=CLOB_API,
+                    chain_id=137,  # Polygon mainnet
+                    key=self._credentials.private_key,
+                    creds=creds,
+                )
+                self._is_authenticated = True
+                logger.info("polymarket_authenticated")
+            except Exception as e:
+                logger.error("polymarket_auth_failed", error=str(e))
+                self._is_authenticated = False
+
+        logger.info("polymarket_connected", authenticated=self._is_authenticated)
 
     async def disconnect(self) -> None:
         """Close HTTP client."""
         if self._client:
             await self._client.aclose()
+        self._clob_client = None
+        self._is_authenticated = False
         self._connected = False
         logger.info("polymarket_disconnected")
+
+    async def get_balance(self) -> Decimal:
+        """Fetch USDC balance from wallet."""
+        if not self._clob_client:
+            raise RuntimeError("Not authenticated - credentials required")
+
+        balance_data = self._clob_client.get_balance()
+        usdc_balance = balance_data.get("USDC", "0")
+        return Decimal(str(usdc_balance))
 
     async def get_markets(self) -> list[Market]:
         """Fetch active markets from Polymarket."""
