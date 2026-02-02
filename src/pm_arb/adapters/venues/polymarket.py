@@ -7,7 +7,7 @@ import httpx
 import structlog
 
 from pm_arb.adapters.venues.base import VenueAdapter
-from pm_arb.core.models import Market, OrderBook, OrderBookLevel
+from pm_arb.core.models import Market, Order, OrderBook, OrderBookLevel, OrderStatus, OrderType, Side
 
 logger = structlog.get_logger()
 
@@ -211,3 +211,91 @@ class PolymarketAdapter(VenueAdapter):
             bids=bids,
             asks=asks,
         )
+
+    async def place_order(
+        self,
+        token_id: str,
+        side: Side,
+        amount: Decimal,
+        order_type: OrderType,
+        price: Decimal | None = None,
+    ) -> Order:
+        """Place an order on Polymarket.
+
+        Args:
+            token_id: The condition token ID to trade
+            side: BUY or SELL
+            amount: Number of tokens
+            order_type: MARKET or LIMIT
+            price: Required for limit orders
+
+        Returns:
+            Order object with status
+        """
+        if not self._clob_client:
+            raise RuntimeError("Not authenticated - credentials required")
+
+        if order_type == OrderType.LIMIT and price is None:
+            raise ValueError("Price required for limit orders")
+
+        from uuid import uuid4
+
+        order_id = f"order-{uuid4().hex[:8]}"
+
+        try:
+            # Build order params for py-clob-client
+            order_args = {
+                "token_id": token_id,
+                "side": "BUY" if side == Side.BUY else "SELL",
+                "size": float(amount),
+            }
+
+            if order_type == OrderType.LIMIT:
+                order_args["price"] = float(price)  # type: ignore[arg-type]
+
+            # Place order via CLOB client
+            response = self._clob_client.create_and_post_order(order_args)
+
+            # Map status
+            status_map = {
+                "MATCHED": OrderStatus.FILLED,
+                "LIVE": OrderStatus.OPEN,
+                "PENDING": OrderStatus.PENDING,
+                "CANCELLED": OrderStatus.CANCELLED,
+                "REJECTED": OrderStatus.REJECTED,
+            }
+
+            status = status_map.get(response.get("status", ""), OrderStatus.PENDING)
+
+            return Order(
+                id=order_id,
+                external_id=response.get("orderID", ""),
+                venue=self.name,
+                token_id=token_id,
+                side=side,
+                order_type=order_type,
+                amount=amount,
+                price=price,
+                filled_amount=Decimal(str(response.get("filledAmount", "0"))),
+                average_price=(
+                    Decimal(str(response.get("averagePrice", "0")))
+                    if response.get("averagePrice")
+                    else None
+                ),
+                status=status,
+            )
+
+        except Exception as e:
+            logger.error("order_placement_failed", error=str(e), token=token_id)
+            return Order(
+                id=order_id,
+                external_id="",
+                venue=self.name,
+                token_id=token_id,
+                side=side,
+                order_type=order_type,
+                amount=amount,
+                price=price,
+                status=OrderStatus.REJECTED,
+                error_message=str(e),
+            )

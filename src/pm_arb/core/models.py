@@ -37,6 +37,25 @@ class TradeStatus(str, Enum):
     FAILED = "failed"
 
 
+class OrderType(str, Enum):
+    """Order type."""
+
+    MARKET = "market"
+    LIMIT = "limit"
+
+
+class OrderStatus(str, Enum):
+    """Order lifecycle status."""
+
+    PENDING = "pending"
+    OPEN = "open"
+    PARTIALLY_FILLED = "partially_filled"
+    FILLED = "filled"
+    CANCELLED = "cancelled"
+    REJECTED = "rejected"
+    EXPIRED = "expired"
+
+
 class Market(BaseModel):
     """A prediction market on a venue."""
 
@@ -153,6 +172,25 @@ class Trade(BaseModel):
     external_id: str | None = None  # Venue's trade ID
     executed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     filled_at: datetime | None = None
+
+
+class Order(BaseModel):
+    """An order placed on a venue."""
+
+    id: str  # Internal ID
+    external_id: str  # Venue's order ID
+    venue: str
+    token_id: str
+    side: Side
+    order_type: OrderType
+    amount: Decimal
+    price: Decimal | None = None  # For limit orders
+    filled_amount: Decimal = Decimal("0")
+    average_price: Decimal | None = None
+    status: OrderStatus = OrderStatus.PENDING
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    error_message: str | None = None
 
 
 class Position(BaseModel):
