@@ -299,3 +299,91 @@ class PolymarketAdapter(VenueAdapter):
                 status=OrderStatus.REJECTED,
                 error_message=str(e),
             )
+
+    async def get_order_status(self, order_id: str) -> Order:
+        """Fetch current status of an order.
+
+        Args:
+            order_id: The venue's order ID
+
+        Returns:
+            Order with updated status
+        """
+        if not self._clob_client:
+            raise RuntimeError("Not authenticated")
+
+        response = self._clob_client.get_order(order_id)
+
+        status_map = {
+            "MATCHED": OrderStatus.FILLED,
+            "LIVE": OrderStatus.OPEN,
+            "PENDING": OrderStatus.PENDING,
+            "CANCELLED": OrderStatus.CANCELLED,
+        }
+
+        return Order(
+            id=order_id,
+            external_id=response.get("orderID", order_id),
+            venue=self.name,
+            token_id=response.get("tokenID", ""),
+            side=Side.BUY if response.get("side") == "BUY" else Side.SELL,
+            order_type=OrderType.LIMIT,  # Assume limit for now
+            amount=Decimal(str(response.get("size", "0"))),
+            price=Decimal(str(response.get("price", "0"))) if response.get("price") else None,
+            filled_amount=Decimal(str(response.get("filledAmount", "0"))),
+            average_price=(
+                Decimal(str(response.get("averagePrice", "0")))
+                if response.get("averagePrice")
+                else None
+            ),
+            status=status_map.get(response.get("status", ""), OrderStatus.PENDING),
+        )
+
+    async def cancel_order(self, order_id: str) -> bool:
+        """Cancel an open order.
+
+        Args:
+            order_id: The venue's order ID
+
+        Returns:
+            True if cancellation succeeded
+        """
+        if not self._clob_client:
+            raise RuntimeError("Not authenticated")
+
+        try:
+            result = self._clob_client.cancel(order_id)
+            return result.get("success", False)
+        except Exception as e:
+            logger.error("order_cancel_failed", order_id=order_id, error=str(e))
+            return False
+
+    async def get_open_orders(self) -> list[Order]:
+        """Get all open orders.
+
+        Returns:
+            List of open orders
+        """
+        if not self._clob_client:
+            raise RuntimeError("Not authenticated")
+
+        response = self._clob_client.get_orders()
+
+        orders = []
+        for data in response:
+            orders.append(
+                Order(
+                    id=data.get("orderID", ""),
+                    external_id=data.get("orderID", ""),
+                    venue=self.name,
+                    token_id=data.get("tokenID", ""),
+                    side=Side.BUY if data.get("side") == "BUY" else Side.SELL,
+                    order_type=OrderType.LIMIT,
+                    amount=Decimal(str(data.get("size", "0"))),
+                    price=Decimal(str(data.get("price", "0"))) if data.get("price") else None,
+                    filled_amount=Decimal(str(data.get("filledAmount", "0"))),
+                    status=OrderStatus.OPEN,
+                )
+            )
+
+        return orders
