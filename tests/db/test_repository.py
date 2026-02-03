@@ -117,3 +117,26 @@ async def test_get_open_trades(repo):
     open_trades = await repo.get_open_trades()
     assert len(open_trades) >= 1
     assert open_trades[0]["status"] == "open"
+
+
+@pytest.mark.asyncio
+async def test_get_daily_summary(repo):
+    """Test daily summary aggregation."""
+    await repo.insert_trade(
+        opportunity_id=f"opp-{uuid4().hex[:8]}",
+        opportunity_type="oracle_lag",
+        market_id="polymarket:btc-100k",
+        venue="polymarket",
+        side="buy",
+        outcome="YES",
+        quantity=Decimal("10.00"),
+        price=Decimal("0.52"),
+        fees=Decimal("0.01"),
+        expected_edge=Decimal("0.05"),
+        strategy_id="oracle-sniper",
+    )
+
+    summary = await repo.get_daily_summary(days=1)
+    assert summary["total_trades"] >= 1
+    assert "by_opportunity_type" in summary
+    assert "win_rate" in summary

@@ -130,3 +130,78 @@ class PaperTradeRepository:
                 realized_pnl,
                 datetime.now(UTC) if status in ("closed", "resolved") else None,
             )
+
+    async def get_daily_summary(self, days: int = 1) -> dict[str, Any]:
+        """Get aggregated summary for the last N days."""
+        since = datetime.now(UTC) - timedelta(days=days)
+        async with self._pool.acquire() as conn:
+            # Total trades and P&L
+            totals = await conn.fetchrow(
+                """
+                SELECT
+                    COUNT(*) as total_trades,
+                    COUNT(*) FILTER (WHERE status = 'open') as open_trades,
+                    COUNT(*) FILTER (WHERE status IN ('closed', 'resolved')) as closed_trades,
+                    COALESCE(SUM(realized_pnl) FILTER (WHERE realized_pnl IS NOT NULL), 0) as realized_pnl,
+                    COUNT(*) FILTER (WHERE realized_pnl > 0) as wins,
+                    COUNT(*) FILTER (WHERE realized_pnl < 0) as losses,
+                    COUNT(*) FILTER (WHERE NOT risk_approved) as rejections
+                FROM paper_trades
+                WHERE created_at >= $1
+                """,
+                since,
+            )
+
+            # By opportunity type
+            by_type = await conn.fetch(
+                """
+                SELECT
+                    opportunity_type,
+                    COUNT(*) as trades,
+                    COALESCE(SUM(realized_pnl), 0) as pnl
+                FROM paper_trades
+                WHERE created_at >= $1 AND risk_approved = true
+                GROUP BY opportunity_type
+                ORDER BY trades DESC
+                """,
+                since,
+            )
+
+            # Risk rejections by reason
+            rejections = await conn.fetch(
+                """
+                SELECT
+                    risk_rejection_reason,
+                    COUNT(*) as count
+                FROM paper_trades
+                WHERE created_at >= $1 AND NOT risk_approved
+                GROUP BY risk_rejection_reason
+                """,
+                since,
+            )
+
+            closed = totals["closed_trades"] or 0
+            wins = totals["wins"] or 0
+
+            return {
+                "total_trades": totals["total_trades"],
+                "open_trades": totals["open_trades"],
+                "closed_trades": closed,
+                "realized_pnl": float(totals["realized_pnl"]),
+                "wins": wins,
+                "losses": totals["losses"] or 0,
+                "win_rate": wins / closed if closed > 0 else 0.0,
+                "rejections": totals["rejections"] or 0,
+                "by_opportunity_type": [
+                    {
+                        "type": row["opportunity_type"],
+                        "trades": row["trades"],
+                        "pnl": float(row["pnl"]),
+                    }
+                    for row in by_type
+                ],
+                "risk_rejections": [
+                    {"reason": row["risk_rejection_reason"], "count": row["count"]}
+                    for row in rejections
+                ],
+            }
