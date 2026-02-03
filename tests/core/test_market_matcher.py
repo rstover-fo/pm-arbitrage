@@ -343,3 +343,146 @@ class TestParseWithLLM:
             results = await matcher._parse_with_llm(markets)
 
         assert results == []
+
+
+class TestMatchMarkets:
+    """Tests for match_markets main method."""
+
+    @pytest.mark.asyncio
+    async def test_matches_regex_parseable_markets(self) -> None:
+        """Should match markets that regex can parse."""
+        mock_scanner = MagicMock()
+        matcher = MarketMatcher(scanner=mock_scanner, anthropic_api_key=None)
+
+        markets = [
+            Market(
+                id="polymarket:123",
+                venue="polymarket",
+                external_id="123",
+                title="Will BTC be above $100,000 on February 28?",
+                yes_price=Decimal("0.5"),
+                no_price=Decimal("0.5"),
+            ),
+            Market(
+                id="polymarket:456",
+                venue="polymarket",
+                external_id="456",
+                title="ETH price above $4,000?",
+                yes_price=Decimal("0.5"),
+                no_price=Decimal("0.5"),
+            ),
+        ]
+
+        result = await matcher.match_markets(markets)
+
+        assert result.total_markets == 2
+        assert result.matched == 2
+        assert result.skipped == 0
+        assert result.failed == 0
+        assert len(result.matched_markets) == 2
+
+    @pytest.mark.asyncio
+    async def test_skips_non_crypto_markets(self) -> None:
+        """Should skip non-crypto markets without calling LLM."""
+        mock_scanner = MagicMock()
+        matcher = MarketMatcher(scanner=mock_scanner, anthropic_api_key="test-key")
+
+        markets = [
+            Market(
+                id="polymarket:111",
+                venue="polymarket",
+                external_id="111",
+                title="Will Biden win?",
+                yes_price=Decimal("0.5"),
+                no_price=Decimal("0.5"),
+            ),
+            Market(
+                id="polymarket:222",
+                venue="polymarket",
+                external_id="222",
+                title="Super Bowl 2026 winner?",
+                yes_price=Decimal("0.5"),
+                no_price=Decimal("0.5"),
+            ),
+        ]
+
+        with patch.object(matcher, "_parse_with_llm", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = []
+            result = await matcher.match_markets(markets)
+
+        assert result.total_markets == 2
+        assert result.matched == 0
+        assert result.skipped == 2
+        # LLM should NOT be called for non-crypto markets
+        mock_llm.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_registers_mappings_with_scanner(self) -> None:
+        """Should call scanner.register_market_oracle_mapping for each match."""
+        mock_scanner = MagicMock()
+        matcher = MarketMatcher(scanner=mock_scanner, anthropic_api_key=None)
+
+        markets = [
+            Market(
+                id="polymarket:123",
+                venue="polymarket",
+                external_id="123",
+                title="Will BTC be above $100,000?",
+                yes_price=Decimal("0.5"),
+                no_price=Decimal("0.5"),
+            ),
+        ]
+
+        await matcher.match_markets(markets)
+
+        mock_scanner.register_market_oracle_mapping.assert_called_once_with(
+            market_id="polymarket:123",
+            oracle_symbol="BTC",
+            threshold=Decimal("100000"),
+            direction="above",
+        )
+
+    @pytest.mark.asyncio
+    async def test_uses_llm_fallback_for_unparsed_crypto(self) -> None:
+        """Should call LLM for crypto markets that regex couldn't parse."""
+        mock_scanner = MagicMock()
+        matcher = MarketMatcher(scanner=mock_scanner, anthropic_api_key="test-key")
+
+        markets = [
+            Market(
+                id="polymarket:111",
+                venue="polymarket",
+                external_id="111",
+                title="Will BTC be above $100,000?",  # Regex parseable
+                yes_price=Decimal("0.5"),
+                no_price=Decimal("0.5"),
+            ),
+            Market(
+                id="polymarket:222",
+                venue="polymarket",
+                external_id="222",
+                title="Bitcoin exceeds one hundred thousand USD?",  # Needs LLM
+                yes_price=Decimal("0.5"),
+                no_price=Decimal("0.5"),
+            ),
+        ]
+
+        with patch.object(matcher, "_parse_with_llm", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = [
+                ParsedMarket(
+                    market_id="polymarket:222",
+                    asset="BTC",
+                    threshold=Decimal("100000"),
+                    direction="above",
+                    expiry=None,
+                    parse_method="llm",
+                )
+            ]
+            result = await matcher.match_markets(markets)
+
+        assert result.matched == 2
+        # LLM called with only the unparsed crypto market
+        mock_llm.assert_called_once()
+        llm_markets = mock_llm.call_args[0][0]
+        assert len(llm_markets) == 1
+        assert llm_markets[0].id == "polymarket:222"

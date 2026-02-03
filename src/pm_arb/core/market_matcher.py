@@ -170,3 +170,59 @@ Return ONLY the JSON array, no other text."""
         except Exception as e:
             logger.error("llm_parse_failed", error=str(e))
             return []
+
+    async def match_markets(self, markets: list[Market]) -> MatchResult:
+        """Parse all markets and register mappings with scanner.
+
+        1. Try regex on each market
+        2. Batch unparsed crypto titles to LLM
+        3. Register all successful parses with scanner
+        """
+        matched_markets: list[ParsedMarket] = []
+        skipped = 0
+        failed = 0
+        needs_llm: list[Market] = []
+
+        # First pass: regex
+        for market in markets:
+            if not self._is_crypto_market(market.title):
+                skipped += 1
+                continue
+
+            parsed = self._parse_with_regex(market)
+            if parsed:
+                matched_markets.append(parsed)
+            else:
+                needs_llm.append(market)
+
+        # Second pass: LLM fallback for unparsed crypto markets
+        if needs_llm:
+            llm_results = await self._parse_with_llm(needs_llm)
+            matched_markets.extend(llm_results)
+            failed = len(needs_llm) - len(llm_results)
+
+        # Register mappings with scanner
+        for parsed in matched_markets:
+            if parsed.asset and parsed.threshold and parsed.direction:
+                self._scanner.register_market_oracle_mapping(
+                    market_id=parsed.market_id,
+                    oracle_symbol=parsed.asset,
+                    threshold=parsed.threshold,
+                    direction=parsed.direction,
+                )
+
+        logger.info(
+            "market_matching_complete",
+            total=len(markets),
+            matched=len(matched_markets),
+            skipped=skipped,
+            failed=failed,
+        )
+
+        return MatchResult(
+            total_markets=len(markets),
+            matched=len(matched_markets),
+            skipped=skipped,
+            failed=failed,
+            matched_markets=matched_markets,
+        )
