@@ -3,6 +3,11 @@
 import asyncio
 from datetime import datetime
 
+import nest_asyncio
+
+# Allow nested event loops (needed for asyncio.run() inside Streamlit)
+nest_asyncio.apply()
+
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -354,12 +359,13 @@ def render_pilot_monitor() -> None:
 
 
 async def _get_pilot_summary() -> dict:
-    """Fetch summary from database."""
+    """Fetch summary from database using cached connection pool."""
     from pm_arb.db.repository import PaperTradeRepository
 
+    # Use cached pool (singleton) instead of creating fresh pool per request
     pool = get_cached_db_pool()
-    repo = PaperTradeRepository(pool)
 
+    repo = PaperTradeRepository(pool)
     summary = await repo.get_daily_summary(days=7)
     trades = await repo.get_trades_since_days(days=1)
 

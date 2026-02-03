@@ -1,10 +1,38 @@
 """Polymarket venue adapter."""
 
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import httpx
 import structlog
+
+logger = structlog.get_logger()
+
+
+def _safe_decimal(value: Any, default: Decimal | None = None) -> Decimal | None:
+    """Safely convert value to Decimal.
+
+    Args:
+        value: Value to convert
+        default: Default to return for None/empty values (not for parse errors)
+
+    Returns:
+        Decimal value, default for None/empty, or None for parse errors (with logging)
+    """
+    if value is None or value == "":
+        if default is not None:
+            logger.debug("decimal_using_default", value=value, default=str(default))
+        return default
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError) as e:
+        logger.warning(
+            "decimal_parse_failed",
+            value=value,
+            value_type=type(value).__name__,
+            error=str(e),
+        )
+        return None
 
 from pm_arb.adapters.venues.base import VenueAdapter
 from pm_arb.core.models import (
@@ -16,8 +44,6 @@ from pm_arb.core.models import (
     OrderType,
     Side,
 )
-
-logger = structlog.get_logger()
 
 # Polymarket API endpoints
 GAMMA_API = "https://gamma-api.polymarket.com"
@@ -107,7 +133,12 @@ class PolymarketAdapter(VenueAdapter):
     async def get_markets(self) -> list[Market]:
         """Fetch active markets from Polymarket."""
         raw_markets = await self._fetch_markets()
-        return [self._parse_market(m) for m in raw_markets]
+        markets = []
+        for m in raw_markets:
+            parsed = self._parse_market(m)
+            if parsed is not None:
+                markets.append(parsed)
+        return markets
 
     async def _fetch_markets(self) -> list[dict[str, Any]]:
         """Fetch raw market data from API."""
@@ -123,22 +154,48 @@ class PolymarketAdapter(VenueAdapter):
         result: list[dict[str, Any]] = response.json()
         return result
 
-    def _parse_market(self, data: dict[str, Any]) -> Market:
-        """Parse API response into Market model."""
-        prices = data.get("outcomePrices", ["0.5", "0.5"])
-        yes_price = Decimal(str(prices[0])) if prices else Decimal("0.5")
-        no_price = Decimal(str(prices[1])) if len(prices) > 1 else Decimal("0.5")
+    def _parse_market(self, data: dict[str, Any]) -> Market | None:
+        """Parse API response into Market model.
+
+        Returns None if price data is invalid (prevents phantom arbitrage signals).
+        """
+        market_id = data.get("id", "unknown")
+        prices = data.get("outcomePrices", [])
+
+        # Require both YES and NO prices to be valid
+        if len(prices) < 2:
+            logger.warning(
+                "market_missing_prices",
+                market_id=market_id,
+                prices_count=len(prices),
+            )
+            return None
+
+        yes_price = _safe_decimal(prices[0])
+        no_price = _safe_decimal(prices[1])
+
+        # Skip market if either price failed to parse
+        if yes_price is None or no_price is None:
+            logger.warning(
+                "market_invalid_prices",
+                market_id=market_id,
+                yes_raw=prices[0],
+                no_raw=prices[1],
+                yes_parsed=str(yes_price) if yes_price else None,
+                no_parsed=str(no_price) if no_price else None,
+            )
+            return None
 
         return Market(
-            id=f"polymarket:{data['id']}",
+            id=f"polymarket:{market_id}",
             venue="polymarket",
-            external_id=data["id"],
+            external_id=market_id,
             title=data.get("question", ""),
             description=data.get("description", ""),
             yes_price=yes_price,
             no_price=no_price,
-            volume_24h=Decimal(str(data.get("volume24hr", 0))),
-            liquidity=Decimal(str(data.get("liquidity", 0))),
+            volume_24h=_safe_decimal(data.get("volume24hr", 0), Decimal("0")) or Decimal("0"),
+            liquidity=_safe_decimal(data.get("liquidity", 0), Decimal("0")) or Decimal("0"),
         )
 
     async def subscribe_prices(self, market_ids: list[str]) -> None:

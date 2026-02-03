@@ -9,7 +9,7 @@ from typing import Any
 import asyncpg
 import structlog
 
-from pm_arb.adapters.oracles.crypto import BinanceOracle
+from pm_arb.adapters.oracles.coingecko import CoinGeckoOracle
 from pm_arb.adapters.venues.polymarket import PolymarketAdapter
 from pm_arb.agents.base import BaseAgent
 from pm_arb.agents.capital_allocator import CapitalAllocatorAgent
@@ -87,11 +87,16 @@ class PilotOrchestrator:
         """Create all agents in startup order."""
         # Create adapters
         polymarket_adapter = PolymarketAdapter()
-        binance_oracle = BinanceOracle()
+        coingecko_oracle = CoinGeckoOracle()
+
+        # Configure oracle for batch fetching (avoids rate limits)
+        symbols = ["BTC", "ETH"]
+        coingecko_oracle.set_symbols(symbols)
 
         # Define channels for scanner
+        # OracleAgent publishes to oracle.{source}.{SYMBOL} (e.g., oracle.coingecko.BTC)
         venue_channels = ["venue.polymarket.prices"]
-        oracle_channels = ["oracle.binance.prices"]
+        oracle_channels = [f"oracle.coingecko.{sym}" for sym in symbols]
 
         return [
             # Data feeds first
@@ -102,9 +107,9 @@ class PilotOrchestrator:
             ),
             OracleAgent(
                 self._redis_url,
-                oracle=binance_oracle,
-                symbols=["BTCUSDT", "ETHUSDT"],
-                poll_interval=1.0,
+                oracle=coingecko_oracle,
+                symbols=symbols,
+                poll_interval=15.0,  # CoinGecko free tier: ~10-30 req/min
             ),
             # Detection layer
             OpportunityScannerAgent(
