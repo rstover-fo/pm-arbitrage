@@ -16,8 +16,9 @@ from pm_arb.core.models import OracleData
 
 logger = structlog.get_logger()
 
-BINANCE_REST = "https://api.binance.com/api/v3"
-BINANCE_WS = "wss://stream.binance.com:9443/ws"
+# Use Binance.US endpoints (Binance.com is geo-blocked in the US)
+BINANCE_REST = "https://api.binance.us/api/v3"
+BINANCE_WS = "wss://stream.binance.us:9443/ws"
 
 
 class BinanceOracle(OracleAdapter):

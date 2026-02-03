@@ -1,5 +1,6 @@
 """Polymarket venue adapter."""
 
+import json
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -160,10 +161,26 @@ class PolymarketAdapter(VenueAdapter):
         Returns None if price data is invalid (prevents phantom arbitrage signals).
         """
         market_id = data.get("id", "unknown")
-        prices = data.get("outcomePrices", [])
+        raw_prices = data.get("outcomePrices", [])
+
+        # outcomePrices may be a JSON-encoded string (e.g., '["0.52", "0.48"]')
+        # or already a list - handle both cases
+        if isinstance(raw_prices, str):
+            try:
+                prices = json.loads(raw_prices)
+            except json.JSONDecodeError as e:
+                logger.warning(
+                    "market_prices_json_decode_failed",
+                    market_id=market_id,
+                    raw_prices=raw_prices[:50] if len(raw_prices) > 50 else raw_prices,
+                    error=str(e),
+                )
+                return None
+        else:
+            prices = raw_prices
 
         # Require both YES and NO prices to be valid
-        if len(prices) < 2:
+        if not isinstance(prices, list) or len(prices) < 2:
             logger.warning(
                 "market_missing_prices",
                 market_id=market_id,
