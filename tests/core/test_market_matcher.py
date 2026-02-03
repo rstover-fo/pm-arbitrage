@@ -1,6 +1,9 @@
 """Tests for MarketMatcher."""
 
 from decimal import Decimal
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from pm_arb.core.market_matcher import MarketMatcher, MatchResult, ParsedMarket
 from pm_arb.core.models import Market
@@ -242,3 +245,101 @@ class TestParseWithRegex:
         )
         result = matcher._parse_with_regex(market)
         assert result is None
+
+
+class TestParseWithLLM:
+    """Tests for _parse_with_llm."""
+
+    @pytest.mark.asyncio
+    async def test_calls_anthropic_with_batch(self) -> None:
+        """Should batch multiple titles in one API call."""
+        matcher = MarketMatcher(scanner=None, anthropic_api_key="test-key")  # type: ignore[arg-type]
+
+        markets = [
+            Market(
+                id="polymarket:111",
+                venue="polymarket",
+                external_id="111",
+                title="Will the price of Bitcoin exceed one hundred thousand dollars?",
+                yes_price=Decimal("0.5"),
+                no_price=Decimal("0.5"),
+            ),
+            Market(
+                id="polymarket:222",
+                venue="polymarket",
+                external_id="222",
+                title="Crypto winter: ETH under 3k by April?",
+                yes_price=Decimal("0.5"),
+                no_price=Decimal("0.5"),
+            ),
+        ]
+
+        mock_response = MagicMock()
+        llm_json = (
+            '[{"asset": "BTC", "threshold": 100000, "direction": "above"}, '
+            '{"asset": "ETH", "threshold": 3000, "direction": "below"}]'
+        )
+        mock_response.content = [MagicMock(text=llm_json)]
+
+        with patch("pm_arb.core.market_matcher.anthropic") as mock_anthropic:
+            mock_client = AsyncMock()
+            mock_client.messages.create = AsyncMock(return_value=mock_response)
+            mock_anthropic.AsyncAnthropic.return_value = mock_client
+
+            results = await matcher._parse_with_llm(markets)
+
+        assert len(results) == 2
+        assert results[0].asset == "BTC"
+        assert results[0].threshold == Decimal("100000")
+        assert results[0].direction == "above"
+        assert results[0].parse_method == "llm"
+        assert results[1].asset == "ETH"
+        assert results[1].threshold == Decimal("3000")
+        assert results[1].direction == "below"
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_without_api_key(self) -> None:
+        """Should return empty list if no API key configured."""
+        matcher = MarketMatcher(scanner=None, anthropic_api_key=None)  # type: ignore[arg-type]
+
+        markets = [
+            Market(
+                id="polymarket:111",
+                venue="polymarket",
+                external_id="111",
+                title="Unusual crypto phrasing",
+                yes_price=Decimal("0.5"),
+                no_price=Decimal("0.5"),
+            ),
+        ]
+
+        results = await matcher._parse_with_llm(markets)
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_handles_llm_returning_null(self) -> None:
+        """Should skip markets where LLM returns null."""
+        matcher = MarketMatcher(scanner=None, anthropic_api_key="test-key")  # type: ignore[arg-type]
+
+        markets = [
+            Market(
+                id="polymarket:111",
+                venue="polymarket",
+                external_id="111",
+                title="Some weird market",
+                yes_price=Decimal("0.5"),
+                no_price=Decimal("0.5"),
+            ),
+        ]
+
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text="[null]")]
+
+        with patch("pm_arb.core.market_matcher.anthropic") as mock_anthropic:
+            mock_client = AsyncMock()
+            mock_client.messages.create = AsyncMock(return_value=mock_response)
+            mock_anthropic.AsyncAnthropic.return_value = mock_client
+
+            results = await matcher._parse_with_llm(markets)
+
+        assert results == []
