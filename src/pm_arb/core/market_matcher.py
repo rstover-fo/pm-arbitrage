@@ -25,3 +25,16 @@ class MatchResult:
     skipped: int  # Non-crypto markets
     failed: int  # Parse failures
     matched_markets: list[ParsedMarket]
+
+
+class MarketMatcher:
+    """Parses market titles and registers oracle mappings."""
+
+    ASSET_ALIASES: dict[str, str] = {
+        "btc": "BTC",
+        "bitcoin": "BTC",
+        "eth": "ETH",
+        "ethereum": "ETH",
+        "sol": "SOL",
+        "solana": "SOL",
+    }

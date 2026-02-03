@@ -2,7 +2,7 @@
 
 from decimal import Decimal
 
-from pm_arb.core.market_matcher import MatchResult, ParsedMarket
+from pm_arb.core.market_matcher import MarketMatcher, MatchResult, ParsedMarket
 
 
 class TestParsedMarket:
@@ -55,3 +55,23 @@ class TestMatchResult:
         assert result.matched == 25
         assert result.skipped == 70
         assert result.failed == 5
+
+
+class TestAssetAliases:
+    """Tests for asset alias resolution."""
+
+    def test_resolves_btc_lowercase(self) -> None:
+        """Should resolve 'btc' to 'BTC'."""
+        assert MarketMatcher.ASSET_ALIASES["btc"] == "BTC"
+
+    def test_resolves_bitcoin(self) -> None:
+        """Should resolve 'bitcoin' to 'BTC'."""
+        assert MarketMatcher.ASSET_ALIASES["bitcoin"] == "BTC"
+
+    def test_resolves_ethereum(self) -> None:
+        """Should resolve 'ethereum' to 'ETH'."""
+        assert MarketMatcher.ASSET_ALIASES["ethereum"] == "ETH"
+
+    def test_resolves_solana(self) -> None:
+        """Should resolve 'solana' to 'SOL'."""
+        assert MarketMatcher.ASSET_ALIASES["solana"] == "SOL"
