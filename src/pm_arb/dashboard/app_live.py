@@ -3,9 +3,12 @@
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+import structlog
 
 from pm_arb.core.registry import AgentRegistry
 from pm_arb.dashboard.service import DashboardService
+
+logger = structlog.get_logger()
 
 st.set_page_config(
     page_title="PM Arbitrage Dashboard (Live)",
@@ -21,7 +24,8 @@ def get_service() -> DashboardService | None:
         registry = AgentRegistry()
         return DashboardService.from_registry(registry)
     except ValueError as e:
-        st.error(f"Agents not running: {e}")
+        logger.error("dashboard_service_init_failed", error=str(e))
+        st.error("Agents not running. Start with: python scripts/run_agents.py")
         return None
 
 

@@ -1,18 +1,20 @@
 """Streamlit Dashboard for PM Arbitrage System."""
 
 import asyncio
-from datetime import datetime
 
 import nest_asyncio
 
 # Allow nested event loops (needed for asyncio.run() inside Streamlit)
 nest_asyncio.apply()
 
-import pandas as pd
-import plotly.express as px
-import streamlit as st
+import pandas as pd  # noqa: E402
+import plotly.express as px  # noqa: E402
+import streamlit as st  # noqa: E402
+import structlog  # noqa: E402
 
-from pm_arb.dashboard.mock_data import (
+logger = structlog.get_logger()
+
+from pm_arb.dashboard.mock_data import (  # noqa: E402
     get_mock_portfolio,
     get_mock_risk_state,
     get_mock_strategies,
@@ -295,7 +297,8 @@ def render_pilot_monitor() -> None:
     try:
         summary = asyncio.run(_get_pilot_summary())
     except Exception as e:
-        st.error(f"Database error: {e}")
+        logger.error("pilot_summary_fetch_failed", error=str(e), exc_info=True)
+        st.error("Unable to load pilot data. Using demo data.")
         summary = _get_mock_pilot_summary()
 
     # Key metrics row

@@ -1,5 +1,6 @@
 """CoinGecko crypto price oracle - no geo-restrictions."""
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -41,6 +42,7 @@ class CoinGeckoOracle(OracleAdapter):
         self._cache_timestamp: datetime | None = None
         self._cache_ttl = timedelta(seconds=cache_ttl_seconds)
         self._symbols: list[str] = []
+        self._fetch_lock = asyncio.Lock()
 
     async def connect(self) -> None:
         """Initialize HTTP client."""
@@ -71,23 +73,29 @@ class CoinGeckoOracle(OracleAdapter):
 
         Uses cached prices from batch fetch if available.
         Returns None if cache is stale and refresh fails.
+
+        Thread-safe: uses lock to prevent concurrent fetches.
         """
         symbol_upper = symbol.upper()
 
-        # Check if cache is stale and needs refresh
+        # Quick check outside lock (no race condition for read)
         if self._is_cache_stale():
-            logger.debug(
-                "coingecko_cache_stale",
-                cache_age_seconds=(
-                    (datetime.now(UTC) - self._cache_timestamp).total_seconds()
-                    if self._cache_timestamp
-                    else None
-                ),
-                ttl_seconds=self._cache_ttl.total_seconds(),
-            )
-            await self._fetch_batch()
+            # Acquire lock for cache refresh
+            async with self._fetch_lock:
+                # Double-check after acquiring lock (another coroutine may have refreshed)
+                if self._is_cache_stale():
+                    logger.debug(
+                        "coingecko_cache_stale",
+                        cache_age_seconds=(
+                            (datetime.now(UTC) - self._cache_timestamp).total_seconds()
+                            if self._cache_timestamp
+                            else None
+                        ),
+                        ttl_seconds=self._cache_ttl.total_seconds(),
+                    )
+                    await self._fetch_batch()
 
-            # If still stale after fetch attempt (fetch failed), return None
+            # After lock release, check if fetch succeeded
             if self._is_cache_stale():
                 logger.warning(
                     "coingecko_cache_expired",
@@ -100,7 +108,7 @@ class CoinGeckoOracle(OracleAdapter):
                 )
                 return None
 
-        # Return from cache
+        # Return from cache (safe to read without lock)
         price = self._cached_prices.get(symbol_upper)
         if price is None:
             return None

@@ -18,9 +18,9 @@ from pm_arb.agents.oracle_agent import OracleAgent
 from pm_arb.agents.paper_executor import PaperExecutorAgent
 from pm_arb.agents.risk_guardian import RiskGuardianAgent
 from pm_arb.agents.venue_watcher import VenueWatcherAgent
-from pm_arb.strategies.oracle_sniper import OracleSniperStrategy
 from pm_arb.core.config import settings
 from pm_arb.db import get_pool, init_db
+from pm_arb.strategies.oracle_sniper import OracleSniperStrategy
 
 logger = structlog.get_logger()
 

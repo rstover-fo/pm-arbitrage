@@ -6,6 +6,32 @@ from typing import Any
 import httpx
 import structlog
 
+from pm_arb.adapters.venues.base import VenueAdapter
+from pm_arb.core.models import (
+    Market,
+    Order,
+    OrderBook,
+    OrderBookLevel,
+    OrderStatus,
+    OrderType,
+    Side,
+)
+
+# Polymarket API endpoints
+GAMMA_API = "https://gamma-api.polymarket.com"
+CLOB_API = "https://clob.polymarket.com"
+
+# Optional: Import CLOB client if available
+try:
+    from py_clob_client.client import ClobClient
+    from py_clob_client.clob_types import ApiCreds
+
+    HAS_CLOB_CLIENT = True
+except ImportError:
+    HAS_CLOB_CLIENT = False
+    ClobClient = None
+    ApiCreds = None
+
 logger = structlog.get_logger()
 
 
@@ -33,32 +59,6 @@ def _safe_decimal(value: Any, default: Decimal | None = None) -> Decimal | None:
             error=str(e),
         )
         return None
-
-from pm_arb.adapters.venues.base import VenueAdapter
-from pm_arb.core.models import (
-    Market,
-    Order,
-    OrderBook,
-    OrderBookLevel,
-    OrderStatus,
-    OrderType,
-    Side,
-)
-
-# Polymarket API endpoints
-GAMMA_API = "https://gamma-api.polymarket.com"
-CLOB_API = "https://clob.polymarket.com"
-
-# Optional: Import CLOB client if available
-try:
-    from py_clob_client.client import ClobClient
-    from py_clob_client.clob_types import ApiCreds
-
-    HAS_CLOB_CLIENT = True
-except ImportError:
-    HAS_CLOB_CLIENT = False
-    ClobClient = None
-    ApiCreds = None
 
 
 class PolymarketAdapter(VenueAdapter):

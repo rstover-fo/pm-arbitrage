@@ -12,9 +12,9 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Infrastructure
-    redis_url: str = "redis://localhost:6379"
-    database_url: str = "postgresql://pm_arb:pm_arb@localhost:5432/pm_arb"
+    # Infrastructure (required - set via environment variables)
+    redis_url: str
+    database_url: str
 
     # API Keys (optional for paper trading)
     anthropic_api_key: str = ""
