@@ -135,7 +135,7 @@ Return ONLY the JSON array, no other text."""
         try:
             client = anthropic.AsyncAnthropic(api_key=self._api_key)
             response = await client.messages.create(
-                model="claude-3-5-haiku-20241022",
+                model="claude-3-5-haiku-latest",
                 max_tokens=1024,
                 messages=[{"role": "user", "content": prompt}],
             )
