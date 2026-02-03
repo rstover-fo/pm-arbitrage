@@ -75,3 +75,38 @@ class TestAssetAliases:
     def test_resolves_solana(self) -> None:
         """Should resolve 'solana' to 'SOL'."""
         assert MarketMatcher.ASSET_ALIASES["solana"] == "SOL"
+
+
+class TestIsCryptoMarket:
+    """Tests for _is_crypto_market helper."""
+
+    def test_btc_is_crypto(self) -> None:
+        """Should identify BTC market."""
+        matcher = MarketMatcher(scanner=None)  # type: ignore[arg-type]
+        assert matcher._is_crypto_market("Will BTC be above $100,000?") is True
+
+    def test_bitcoin_is_crypto(self) -> None:
+        """Should identify Bitcoin market."""
+        matcher = MarketMatcher(scanner=None)  # type: ignore[arg-type]
+        assert matcher._is_crypto_market("Bitcoin above $95,000") is True
+
+    def test_ethereum_is_crypto(self) -> None:
+        """Should identify Ethereum market."""
+        matcher = MarketMatcher(scanner=None)  # type: ignore[arg-type]
+        assert matcher._is_crypto_market("ETH price above $4,000") is True
+
+    def test_politics_not_crypto(self) -> None:
+        """Should reject politics market."""
+        matcher = MarketMatcher(scanner=None)  # type: ignore[arg-type]
+        assert matcher._is_crypto_market("Will Biden win?") is False
+
+    def test_sports_not_crypto(self) -> None:
+        """Should reject sports market."""
+        matcher = MarketMatcher(scanner=None)  # type: ignore[arg-type]
+        assert matcher._is_crypto_market("Super Bowl winner 2026?") is False
+
+    def test_case_insensitive(self) -> None:
+        """Should match regardless of case."""
+        matcher = MarketMatcher(scanner=None)  # type: ignore[arg-type]
+        assert matcher._is_crypto_market("BITCOIN above $100k") is True
+        assert matcher._is_crypto_market("ethereum BELOW $3000") is True
