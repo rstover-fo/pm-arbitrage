@@ -5,10 +5,12 @@ from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
+import asyncpg
 import structlog
 
 from pm_arb.agents.base import BaseAgent
 from pm_arb.core.models import Side, Trade, TradeStatus
+from pm_arb.db.repository import PaperTradeRepository
 
 logger = structlog.get_logger()
 
@@ -16,11 +18,51 @@ logger = structlog.get_logger()
 class PaperExecutorAgent(BaseAgent):
     """Simulates trade execution for paper trading mode."""
 
-    def __init__(self, redis_url: str) -> None:
+    def __init__(
+        self,
+        redis_url: str,
+        db_pool: asyncpg.Pool | None = None,
+    ) -> None:
         self.name = "paper-executor"
         super().__init__(redis_url)
         self._pending_requests: dict[str, dict[str, Any]] = {}
         self._trades: list[Trade] = []
+        self._db_pool = db_pool
+        self._repo: PaperTradeRepository | None = None
+
+    async def run(self) -> None:
+        """Start agent with state recovery from database."""
+        if self._db_pool is not None:
+            self._repo = PaperTradeRepository(self._db_pool)
+            await self._recover_state()
+        await super().run()
+
+    async def _recover_state(self) -> None:
+        """Load open trades from database on startup."""
+        if self._repo is None:
+            return
+
+        open_trades = await self._repo.get_open_trades()
+        for row in open_trades:
+            trade = Trade(
+                id=str(row["id"]),
+                request_id=row["opportunity_id"],  # Use opportunity_id as request_id
+                market_id=row["market_id"],
+                venue=row["venue"],
+                side=Side(row["side"]),
+                outcome=row["outcome"],
+                amount=Decimal(str(row["quantity"])),
+                price=Decimal(str(row["price"])),
+                fees=Decimal(str(row["fees"])),
+                status=TradeStatus.FILLED,
+            )
+            self._trades.append(trade)
+
+        if open_trades:
+            logger.info(
+                "state_recovered",
+                open_trades=len(open_trades),
+            )
 
     def get_subscriptions(self) -> list[str]:
         """Subscribe to trade decisions and requests."""
@@ -29,7 +71,6 @@ class PaperExecutorAgent(BaseAgent):
     async def handle_message(self, channel: str, data: dict[str, Any]) -> None:
         """Process trade decisions and requests."""
         if channel == "trade.requests":
-            # Store pending request for later matching
             request_id = data.get("id", "")
             if request_id:
                 self._pending_requests[request_id] = data
@@ -44,7 +85,35 @@ class PaperExecutorAgent(BaseAgent):
         if approved:
             await self._execute_paper_trade(request_id)
         else:
-            await self._publish_rejection(request_id, data.get("reason", "Rejected"))
+            await self._handle_rejection(request_id, data.get("reason", "Rejected"))
+
+    async def _handle_rejection(self, request_id: str, reason: str) -> None:
+        """Handle and persist a rejected trade."""
+        request = self._pending_requests.get(request_id)
+
+        # Persist rejection if we have a repo and request
+        if self._repo and request:
+            await self._repo.insert_trade(
+                opportunity_id=request.get("opportunity_id", "unknown"),
+                opportunity_type=request.get("opportunity_type", "unknown"),
+                market_id=request.get("market_id", "unknown"),
+                venue=request.get("market_id", "").split(":")[0] or "unknown",
+                side=request.get("side", "buy"),
+                outcome=request.get("outcome", "YES"),
+                quantity=Decimal(str(request.get("amount", "0"))),
+                price=Decimal(str(request.get("max_price", "0"))),
+                fees=Decimal("0"),
+                expected_edge=Decimal(str(request.get("expected_edge", "0"))),
+                strategy_id=request.get("strategy"),
+                risk_approved=False,
+                risk_rejection_reason=reason,
+            )
+
+        await self._publish_rejection(request_id, reason)
+
+        # Clean up
+        if request_id in self._pending_requests:
+            del self._pending_requests[request_id]
 
     async def _execute_paper_trade(self, request_id: str) -> None:
         """Simulate trade execution."""
@@ -53,12 +122,14 @@ class PaperExecutorAgent(BaseAgent):
             logger.warning("no_pending_request", request_id=request_id)
             return
 
-        # Simulate fill at max_price (conservative)
         fill_price = Decimal(str(request.get("max_price", "0.50")))
         amount = Decimal(str(request.get("amount", "0")))
         market_id = request.get("market_id", "")
         venue = market_id.split(":")[0] if ":" in market_id else "unknown"
         strategy = request.get("strategy", "unknown")
+        opportunity_id = request.get("opportunity_id", "unknown")
+        opportunity_type = request.get("opportunity_type", "unknown")
+        expected_edge = Decimal(str(request.get("expected_edge", "0")))
 
         trade = Trade(
             id=f"paper-{uuid4().hex[:8]}",
@@ -69,15 +140,32 @@ class PaperExecutorAgent(BaseAgent):
             outcome=request.get("outcome", "YES"),
             amount=amount,
             price=fill_price,
-            fees=amount * Decimal("0.001"),  # Simulate 0.1% fee
+            fees=amount * Decimal("0.001"),
             status=TradeStatus.FILLED,
         )
 
         self._trades.append(trade)
 
-        # Simulate P&L (for paper trading, assume small random profit/loss)
-        # In real trading, P&L would be calculated when position closes
-        simulated_pnl = amount * Decimal("0.05")  # Assume 5% profit for demo
+        # Persist to database if available
+        persisted = False
+        if self._repo:
+            db_id = await self._repo.insert_trade(
+                opportunity_id=opportunity_id,
+                opportunity_type=opportunity_type,
+                market_id=market_id,
+                venue=venue,
+                side=trade.side.value,
+                outcome=trade.outcome,
+                quantity=amount,
+                price=fill_price,
+                fees=trade.fees,
+                expected_edge=expected_edge,
+                strategy_id=strategy,
+                risk_approved=True,
+            )
+            persisted = db_id is not None
+
+        simulated_pnl = amount * Decimal("0.05")
 
         logger.info(
             "paper_trade_executed",
@@ -88,16 +176,14 @@ class PaperExecutorAgent(BaseAgent):
             outcome=trade.outcome,
             amount=str(trade.amount),
             price=str(trade.price),
+            persisted=persisted,
         )
 
         await self._publish_trade_result(
             trade, strategy=strategy, pnl=simulated_pnl, paper_trade=True
         )
 
-        # Clean up pending request
         del self._pending_requests[request_id]
-
-        # Publish state update for real-time dashboard
         await self.publish_state_update()
 
     async def _publish_rejection(self, request_id: str, reason: str) -> None:
@@ -142,7 +228,7 @@ class PaperExecutorAgent(BaseAgent):
 
     def get_state_snapshot(self) -> dict[str, Any]:
         """Return trade history snapshot for dashboard."""
-        recent = self._trades[-50:]  # Last 50 trades
+        recent = self._trades[-50:]
         return {
             "trade_count": len(self._trades),
             "recent_trades": [
@@ -159,7 +245,7 @@ class PaperExecutorAgent(BaseAgent):
                     "status": t.status.value,
                     "executed_at": t.executed_at.isoformat(),
                 }
-                for t in reversed(recent)  # Most recent first
+                for t in reversed(recent)
             ],
         }
 
@@ -171,7 +257,6 @@ class PaperExecutorAgent(BaseAgent):
 
         snapshot = self.get_state_snapshot()
 
-        # Serialize Decimals to strings for JSON
         serializable_trades = [
             {
                 **trade,
@@ -182,9 +267,7 @@ class PaperExecutorAgent(BaseAgent):
             for trade in snapshot["recent_trades"][:10]
         ]
 
-        client = aioredis.from_url(  # type: ignore[no-untyped-call]
-            self._redis_url, decode_responses=True
-        )
+        client = aioredis.from_url(self._redis_url, decode_responses=True)
         try:
             await client.publish(
                 "trade.results",
