@@ -1,5 +1,6 @@
 """Opportunity Scanner Agent - detects arbitrage opportunities."""
 
+import re
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -18,6 +19,15 @@ from pm_arb.core.models import (
 )
 
 logger = structlog.get_logger()
+
+# Keywords for detecting 15-minute crypto markets with taker fees
+CRYPTO_KEYWORDS = ["btc", "bitcoin", "eth", "ethereum", "sol", "solana", "xrp"]
+DURATION_PATTERNS = [
+    r"15\s*min",
+    r"15-min",
+    r"fifteen\s*min",
+    r"15\s*minute",
+]
 
 
 class OpportunityScannerAgent(BaseAgent):
@@ -79,6 +89,59 @@ class OpportunityScannerAgent(BaseAgent):
         self._matched_markets[event_id] = market_ids
         for market_id in market_ids:
             self._market_to_event[market_id] = event_id
+
+    def _is_fee_market(self, market: Market) -> bool:
+        """Check if market has taker fees (15-min crypto markets).
+
+        Polymarket charges taker fees on 15-minute crypto markets only.
+        All other markets (longer duration, non-crypto) are fee-free.
+        """
+        title_lower = market.title.lower()
+
+        # Must be crypto-related
+        is_crypto = any(kw in title_lower for kw in CRYPTO_KEYWORDS)
+        if not is_crypto:
+            return False
+
+        # Must be 15-minute duration
+        is_15min = any(re.search(p, title_lower) for p in DURATION_PATTERNS)
+
+        return is_15min
+
+    def _calculate_taker_fee(self, price: Decimal) -> Decimal:
+        """Calculate expected taker fee rate for 15-min crypto markets.
+
+        Fee formula from Polymarket docs:
+            fee_rate = 0.0312 * (0.5 - abs(price - 0.5))
+
+        Fee is highest at 50% probability (~1.56%), zero at 0% or 100%.
+        """
+        # Distance from edge (0 or 1) - maximized at 0.5
+        distance_from_edge = Decimal("0.5") - abs(price - Decimal("0.5"))
+        fee_rate = Decimal("0.0312") * distance_from_edge
+        return fee_rate
+
+    def _calculate_net_edge(
+        self,
+        gross_edge: Decimal,
+        market: Market,
+        entry_price: Decimal,
+    ) -> tuple[Decimal, Decimal]:
+        """Calculate edge after accounting for fees.
+
+        Args:
+            gross_edge: Raw edge before fees
+            market: Market being evaluated
+            entry_price: Expected entry price
+
+        Returns:
+            Tuple of (net_edge, fee_rate)
+        """
+        if self._is_fee_market(market):
+            fee_rate = self._calculate_taker_fee(entry_price)
+            net_edge = gross_edge - fee_rate
+            return net_edge, fee_rate
+        return gross_edge, Decimal("0")  # No fees on non-15-min markets
 
     async def handle_message(self, channel: str, data: dict[str, Any]) -> None:
         """Route messages to appropriate handler."""
@@ -197,10 +260,21 @@ class OpportunityScannerAgent(BaseAgent):
 
         # Calculate edge
         current_yes = market.yes_price
-        edge = fair_yes_price - current_yes
+        gross_edge = fair_yes_price - current_yes
 
-        if abs(edge) < self._min_edge_pct:
-            return  # Not enough edge
+        # Apply fee-aware edge calculation for 15-min crypto markets
+        net_edge, fee_rate = self._calculate_net_edge(gross_edge, market, current_yes)
+
+        if abs(net_edge) < self._min_edge_pct:
+            if fee_rate > 0:
+                logger.debug(
+                    "opportunity_filtered_by_fees",
+                    market_id=market.id,
+                    gross_edge=str(gross_edge),
+                    net_edge=str(net_edge),
+                    fee_rate=str(fee_rate),
+                )
+            return  # Not enough edge after fees
 
         # Calculate signal strength based on oracle distance from threshold
         signal_strength = min(Decimal("1.0"), distance_pct * 10)
@@ -208,20 +282,23 @@ class OpportunityScannerAgent(BaseAgent):
         if signal_strength < self._min_signal_strength:
             return
 
-        # Publish opportunity
+        # Publish opportunity with fee metadata
         opportunity = Opportunity(
             id=f"opp-{uuid4().hex[:8]}",
             type=OpportunityType.ORACLE_LAG,
             markets=[market.id],
             oracle_source=oracle_data.source,
             oracle_value=oracle_data.value,
-            expected_edge=edge,
+            expected_edge=net_edge,  # Use net edge after fees
             signal_strength=signal_strength,
             metadata={
                 "threshold": str(threshold),
                 "direction": direction,
                 "fair_yes_price": str(fair_yes_price),
                 "current_yes_price": str(current_yes),
+                "gross_edge": str(gross_edge),
+                "fee_rate": str(fee_rate),
+                "is_fee_market": self._is_fee_market(market),
             },
         )
 

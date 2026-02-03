@@ -1,6 +1,9 @@
 """CLI for PM Arbitrage pilot."""
 
 import asyncio
+import os
+import signal
+import time
 from datetime import datetime
 
 import click
@@ -10,6 +13,7 @@ from rich.table import Table
 
 from pm_arb.db import close_pool, get_pool, init_db
 from pm_arb.db.repository import PaperTradeRepository
+from pm_arb.pilot import get_pid_file
 
 console = Console()
 
@@ -121,6 +125,96 @@ def pilot() -> None:
 def version() -> None:
     """Show version."""
     click.echo("pm-arbitrage 0.1.0")
+
+
+@cli.command()
+@click.option("--force", is_flag=True, help="Force kill with SIGKILL if graceful stop fails")
+@click.option("--timeout", default=10, help="Seconds to wait for graceful shutdown")
+def stop(force: bool, timeout: int) -> None:
+    """Stop the running pilot gracefully."""
+    pid_file = get_pid_file()
+
+    if not pid_file.exists():
+        console.print("[yellow]No running pilot found (pid file missing)[/yellow]")
+        return
+
+    try:
+        pid = int(pid_file.read_text().strip())
+    except ValueError:
+        console.print("[red]Invalid PID file contents[/red]")
+        pid_file.unlink(missing_ok=True)
+        return
+
+    # Check if process is actually running
+    try:
+        os.kill(pid, 0)  # Signal 0 just checks if process exists
+    except ProcessLookupError:
+        console.print(f"[yellow]Process {pid} not running, cleaning up stale pid file[/yellow]")
+        pid_file.unlink(missing_ok=True)
+        return
+    except PermissionError:
+        console.print(f"[red]No permission to signal process {pid}[/red]")
+        return
+
+    # Send SIGTERM for graceful shutdown
+    console.print(f"[blue]Sending SIGTERM to pilot (PID {pid})...[/blue]")
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        console.print("[green]Pilot already stopped[/green]")
+        pid_file.unlink(missing_ok=True)
+        return
+
+    # Wait for graceful shutdown
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            os.kill(pid, 0)
+            time.sleep(0.5)
+        except ProcessLookupError:
+            console.print("[green]Pilot stopped gracefully[/green]")
+            pid_file.unlink(missing_ok=True)
+            return
+
+    # Process still running after timeout
+    if force:
+        console.print("[yellow]Graceful shutdown timed out, sending SIGKILL...[/yellow]")
+        try:
+            os.kill(pid, signal.SIGKILL)
+            time.sleep(0.5)
+            console.print("[green]Pilot force-killed[/green]")
+        except ProcessLookupError:
+            console.print("[green]Pilot stopped[/green]")
+        pid_file.unlink(missing_ok=True)
+    else:
+        console.print(
+            f"[red]Pilot did not stop within {timeout}s. Use --force to kill.[/red]"
+        )
+
+
+@cli.command()
+def status() -> None:
+    """Check if the pilot is running."""
+    pid_file = get_pid_file()
+
+    if not pid_file.exists():
+        console.print("[dim]Pilot is not running[/dim]")
+        return
+
+    try:
+        pid = int(pid_file.read_text().strip())
+    except ValueError:
+        console.print("[yellow]Invalid PID file[/yellow]")
+        return
+
+    # Check if process is actually running
+    try:
+        os.kill(pid, 0)
+        console.print(f"[green]Pilot is running[/green] (PID {pid})")
+    except ProcessLookupError:
+        console.print("[yellow]Pilot not running (stale pid file)[/yellow]")
+    except PermissionError:
+        console.print(f"[yellow]Pilot may be running as different user[/yellow] (PID {pid})")
 
 
 if __name__ == "__main__":

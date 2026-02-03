@@ -203,6 +203,20 @@ class PolymarketAdapter(VenueAdapter):
             )
             return None
 
+        # Extract CLOB token IDs for order placement
+        # clobTokenIds is a JSON string: '["yes_token_id", "no_token_id"]'
+        raw_token_ids = data.get("clobTokenIds", "[]")
+        if isinstance(raw_token_ids, str):
+            try:
+                token_ids = json.loads(raw_token_ids)
+            except json.JSONDecodeError:
+                token_ids = []
+        else:
+            token_ids = raw_token_ids if isinstance(raw_token_ids, list) else []
+
+        yes_token_id = token_ids[0] if len(token_ids) > 0 else ""
+        no_token_id = token_ids[1] if len(token_ids) > 1 else ""
+
         return Market(
             id=f"polymarket:{market_id}",
             venue="polymarket",
@@ -211,6 +225,8 @@ class PolymarketAdapter(VenueAdapter):
             description=data.get("description", ""),
             yes_price=yes_price,
             no_price=no_price,
+            yes_token_id=yes_token_id,
+            no_token_id=no_token_id,
             volume_24h=_safe_decimal(data.get("volume24hr", 0), Decimal("0")) or Decimal("0"),
             liquidity=_safe_decimal(data.get("liquidity", 0), Decimal("0")) or Decimal("0"),
         )

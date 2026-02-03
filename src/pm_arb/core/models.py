@@ -66,6 +66,8 @@ class Market(BaseModel):
     description: str = ""
     yes_price: Decimal
     no_price: Decimal
+    yes_token_id: str = ""  # CLOB token ID for YES outcome (Polymarket)
+    no_token_id: str = ""  # CLOB token ID for NO outcome (Polymarket)
     volume_24h: Decimal = Decimal("0")
     liquidity: Decimal = Decimal("0")
     end_date: datetime | None = None

@@ -41,7 +41,10 @@ class PolymarketCredentials(BaseModel):
 
 
 def load_credentials(venue: str) -> PolymarketCredentials:
-    """Load credentials from environment variables.
+    """Load credentials from environment variables or settings.
+
+    Credentials are loaded from environment variables first, falling back
+    to pydantic-settings (which loads from .env file).
 
     Args:
         venue: Venue name (e.g., "polymarket")
@@ -50,14 +53,26 @@ def load_credentials(venue: str) -> PolymarketCredentials:
         Credentials object for the venue
 
     Raises:
-        ValueError: If required environment variables are missing
+        ValueError: If required credentials are missing
     """
+    # Import settings here to avoid circular import
+    from pm_arb.core.config import settings
+
     prefix = venue.upper()
 
-    api_key = os.environ.get(f"{prefix}_API_KEY")
-    secret = os.environ.get(f"{prefix}_SECRET")
-    passphrase = os.environ.get(f"{prefix}_PASSPHRASE")
-    private_key = os.environ.get(f"{prefix}_PRIVATE_KEY")
+    # Try environment variables first, fall back to settings
+    api_key = os.environ.get(f"{prefix}_API_KEY") or (
+        settings.polymarket_api_key if venue == "polymarket" else ""
+    )
+    secret = os.environ.get(f"{prefix}_SECRET") or (
+        settings.polymarket_secret if venue == "polymarket" else ""
+    )
+    passphrase = os.environ.get(f"{prefix}_PASSPHRASE") or (
+        settings.polymarket_passphrase if venue == "polymarket" else ""
+    )
+    private_key = os.environ.get(f"{prefix}_PRIVATE_KEY") or (
+        settings.polymarket_private_key if venue == "polymarket" else ""
+    )
 
     missing = []
     if not api_key:
@@ -70,13 +85,7 @@ def load_credentials(venue: str) -> PolymarketCredentials:
         missing.append(f"{prefix}_PRIVATE_KEY")
 
     if missing:
-        raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
-
-    # Type assertions for mypy (values verified non-None above)
-    assert api_key is not None
-    assert secret is not None
-    assert passphrase is not None
-    assert private_key is not None
+        raise ValueError(f"Missing required credentials: {', '.join(missing)}")
 
     return PolymarketCredentials(
         api_key=api_key,

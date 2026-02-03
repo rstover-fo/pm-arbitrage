@@ -119,7 +119,7 @@ async def test_executor_reports_failure(mock_credentials: PolymarketCredentials)
 async def test_executor_subscribes_to_approved_trades(
     mock_credentials: PolymarketCredentials,
 ) -> None:
-    """Executor should subscribe to approved trade channel."""
+    """Executor should subscribe to trade decisions and requests channels."""
     executor = LiveExecutorAgent(
         redis_url="redis://localhost:6379",
         credentials={"polymarket": mock_credentials},
@@ -127,7 +127,9 @@ async def test_executor_subscribes_to_approved_trades(
 
     subs = executor.get_subscriptions()
 
-    assert "trade.approved" in subs
+    # LiveExecutor now subscribes to same channels as PaperExecutor
+    assert "trade.decisions" in subs
+    assert "trade.requests" in subs
 
 
 @pytest.mark.asyncio
