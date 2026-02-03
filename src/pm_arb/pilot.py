@@ -19,6 +19,7 @@ from pm_arb.agents.paper_executor import PaperExecutorAgent
 from pm_arb.agents.risk_guardian import RiskGuardianAgent
 from pm_arb.agents.venue_watcher import VenueWatcherAgent
 from pm_arb.core.config import settings
+from pm_arb.core.market_matcher import MarketMatcher
 from pm_arb.db import get_pool, init_db
 from pm_arb.strategies.oracle_sniper import OracleSniperStrategy
 
@@ -65,7 +66,7 @@ class PilotOrchestrator:
         logger.info("pilot_starting")
 
         # Create agents in startup order
-        self._agents = self._create_agents()
+        self._agents = await self._create_agents()
 
         # Start all agents
         for agent in self._agents:
@@ -83,10 +84,11 @@ class PilotOrchestrator:
         finally:
             await self._shutdown()
 
-    def _create_agents(self) -> list[BaseAgent]:
+    async def _create_agents(self) -> list[BaseAgent]:
         """Create all agents in startup order."""
         # Create adapters
         polymarket_adapter = PolymarketAdapter()
+        await polymarket_adapter.connect()
         coingecko_oracle = CoinGeckoOracle()
 
         # Configure oracle for batch fetching (avoids rate limits)
@@ -97,6 +99,18 @@ class PilotOrchestrator:
         # OracleAgent publishes to oracle.{source}.{SYMBOL} (e.g., oracle.coingecko.BTC)
         venue_channels = ["venue.polymarket.prices"]
         oracle_channels = [f"oracle.coingecko.{sym}" for sym in symbols]
+
+        # Create scanner first so we can register mappings
+        scanner = OpportunityScannerAgent(
+            self._redis_url,
+            venue_channels=venue_channels,
+            oracle_channels=oracle_channels,
+        )
+
+        # Match markets to oracles before scanning starts
+        matcher = MarketMatcher(scanner, anthropic_api_key=settings.anthropic_api_key)
+        markets = await polymarket_adapter.get_markets()
+        await matcher.match_markets(markets)
 
         return [
             # Data feeds first
@@ -112,11 +126,7 @@ class PilotOrchestrator:
                 poll_interval=15.0,  # CoinGecko free tier: ~10-30 req/min
             ),
             # Detection layer
-            OpportunityScannerAgent(
-                self._redis_url,
-                venue_channels=venue_channels,
-                oracle_channels=oracle_channels,
-            ),
+            scanner,
             # Risk & execution
             RiskGuardianAgent(self._redis_url),
             PaperExecutorAgent(self._redis_url, db_pool=self._db_pool),

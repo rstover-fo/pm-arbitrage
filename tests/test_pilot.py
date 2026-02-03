@@ -1,9 +1,11 @@
 """Tests for pilot orchestrator."""
 
 import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from pm_arb.core.market_matcher import MatchResult
 from pm_arb.pilot import PilotOrchestrator
 
 
@@ -47,3 +49,48 @@ async def test_orchestrator_health_check(redis_url, test_db_pool):
 
     await orchestrator.stop()
     await task
+
+
+class TestPilotMarketMatching:
+    """Tests for market matching integration in pilot."""
+
+    @pytest.mark.asyncio
+    async def test_matches_markets_before_scanning(self) -> None:
+        """Should match markets after creating agents but before running."""
+        with patch("pm_arb.pilot.PolymarketAdapter") as mock_adapter_cls, \
+             patch("pm_arb.pilot.CoinGeckoOracle"), \
+             patch("pm_arb.pilot.MarketMatcher") as mock_matcher_cls, \
+             patch("pm_arb.pilot.init_db", new_callable=AsyncMock), \
+             patch("pm_arb.pilot.get_pool", new_callable=AsyncMock):
+
+            # Setup mock adapter
+            mock_adapter = AsyncMock()
+            mock_adapter.get_markets = AsyncMock(return_value=[])
+            mock_adapter_cls.return_value = mock_adapter
+
+            # Setup mock matcher
+            mock_matcher = MagicMock()
+            mock_matcher.match_markets = AsyncMock(
+                return_value=MatchResult(
+                    total_markets=0,
+                    matched=0,
+                    skipped=0,
+                    failed=0,
+                    matched_markets=[],
+                )
+            )
+            mock_matcher_cls.return_value = mock_matcher
+
+            orchestrator = PilotOrchestrator(redis_url="redis://localhost:6379")
+
+            # Run briefly then stop
+            async def run_and_stop() -> None:
+                task = asyncio.create_task(orchestrator.run())
+                await asyncio.sleep(0.1)
+                await orchestrator.stop()
+                await task
+
+            await run_and_stop()
+
+            # Verify matcher was called
+            mock_matcher.match_markets.assert_called_once()
