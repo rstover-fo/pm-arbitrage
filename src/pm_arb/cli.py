@@ -110,6 +110,14 @@ async def _report(days: int, as_json: bool) -> None:
 
 
 @cli.command()
+def pilot() -> None:
+    """Start the pilot orchestrator."""
+    from pm_arb.pilot import main
+
+    asyncio.run(main())
+
+
+@cli.command()
 def version() -> None:
     """Show version."""
     click.echo("pm-arbitrage 0.1.0")
