@@ -18,8 +18,14 @@ class Settings(BaseSettings):
 
     # API Keys (optional for paper trading)
     anthropic_api_key: str = ""
+
+    # Polymarket CLOB API credentials (required for live trading)
     polymarket_api_key: str = ""
-    polymarket_private_key: str = ""
+    polymarket_secret: str = ""
+    polymarket_passphrase: str = ""
+    polymarket_private_key: str = ""  # Ethereum private key (0x + 64 hex chars)
+
+    # Kalshi credentials (not implemented yet)
     kalshi_email: str = ""
     kalshi_password: str = ""
 

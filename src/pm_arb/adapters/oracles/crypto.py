@@ -82,10 +82,16 @@ class BinanceOracle(OracleAdapter):
         """Subscribe to real-time price updates via WebSocket."""
         self._subscribed_symbols = symbols
         streams = [f"{s.lower()}usdt@ticker" for s in symbols]
-        stream_url = f"{BINANCE_WS}/{'/'.join(streams)}"
+
+        # Single stream: use /ws/<stream>
+        # Multiple streams: use /stream?streams=<stream1>/<stream2>/...
+        if len(streams) == 1:
+            stream_url = f"{BINANCE_WS}/{streams[0]}"
+        else:
+            stream_url = f"wss://stream.binance.us:9443/stream?streams={'/'.join(streams)}"
 
         self._ws = await websockets.connect(stream_url)
-        logger.info("binance_ws_subscribed", symbols=symbols)
+        logger.info("binance_ws_subscribed", symbols=symbols, url=stream_url)
 
     async def stream(self) -> AsyncIterator[OracleData]:
         """Stream real-time price updates."""

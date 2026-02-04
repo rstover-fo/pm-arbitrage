@@ -121,6 +121,7 @@ async def test_full_execution_flow(mock_credentials: PolymarketCredentials) -> N
     with patch.object(executor, "_get_adapter") as mock_get:
         mock_adapter = AsyncMock()
         mock_adapter.is_connected = True
+        mock_adapter.get_balance.return_value = Decimal("1000")  # Sufficient balance
         mock_adapter.place_order.return_value = mock_order
         mock_get.return_value = mock_adapter
 
@@ -271,6 +272,7 @@ async def test_executor_handles_adapter_failure(mock_credentials: PolymarketCred
     with patch.object(executor, "_get_adapter") as mock_get:
         mock_adapter = AsyncMock()
         mock_adapter.is_connected = True
+        mock_adapter.get_balance.return_value = Decimal("1000")  # Sufficient balance
         mock_adapter.place_order.side_effect = Exception("Connection refused")
         mock_get.return_value = mock_adapter
 
