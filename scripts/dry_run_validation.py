@@ -66,70 +66,86 @@ class DryRunMetrics:
 
 
 class MetricCollector:
-    """Subscribes to Redis channels and collects metrics."""
+    """Reads from Redis Streams and collects metrics."""
+
+    # Streams to monitor (agents publish via XADD to these)
+    # Note: venue/oracle streams include adapter names
+    STREAMS = [
+        "venue.polymarket.prices",  # VenueWatcher publishes venue.{adapter}.prices
+        "oracle.coingecko.BTC",  # OracleAgent publishes oracle.{source}.{symbol}
+        "oracle.coingecko.ETH",
+        "opportunities.detected",
+        "trade.requests",
+        "trade.decisions",
+        "trade.results",
+    ]
 
     def __init__(self, redis_url: str, metrics: DryRunMetrics) -> None:
         self._redis_url = redis_url
         self._metrics = metrics
         self._running = False
+        # Track last read ID for each stream (start from newest messages)
+        self._last_ids: dict[str, str] = {stream: "$" for stream in self.STREAMS}
 
     async def run(self) -> None:
-        """Subscribe to channels and collect metrics."""
+        """Read from Redis Streams and collect metrics."""
         import redis.asyncio as redis
 
         client = redis.from_url(self._redis_url, decode_responses=True)
-        pubsub = client.pubsub()
-
-        # Subscribe to all relevant channels using patterns
-        await pubsub.psubscribe(
-            "venue.*",
-            "oracle.*",
-            "opportunities.*",
-            "trade.*",
-        )
 
         self._running = True
-        logger.info("metric_collector_started")
+        logger.info("metric_collector_started", streams=self.STREAMS)
 
         try:
             while self._running:
-                message = await pubsub.get_message(
-                    ignore_subscribe_messages=True, timeout=1.0
-                )
-                if message is None:
-                    continue
+                # Build streams dict for XREAD
+                streams_to_read = {
+                    stream: self._last_ids[stream] for stream in self.STREAMS
+                }
 
-                channel = message.get("channel", "")
-                if isinstance(channel, bytes):
-                    channel = channel.decode()
+                try:
+                    # XREAD with 1 second block timeout
+                    results = await client.xread(streams_to_read, count=100, block=1000)
 
-                self._process_message(channel, message.get("data"))
+                    if not results:
+                        continue
+
+                    # Process each stream's messages
+                    for stream_name, entries in results:
+                        for msg_id, data in entries:
+                            self._process_message(stream_name, data)
+                            # Update last ID for this stream
+                            self._last_ids[stream_name] = msg_id
+
+                except redis.ResponseError as e:
+                    # Stream might not exist yet - that's ok
+                    if "NOGROUP" not in str(e):
+                        logger.warning("redis_read_error", error=str(e))
 
         except asyncio.CancelledError:
             pass
         finally:
-            await pubsub.unsubscribe()
             await client.aclose()
             logger.info("metric_collector_stopped")
 
-    def _process_message(self, channel: str, data: Any) -> None:
+    def _process_message(self, stream: str, data: dict[str, Any]) -> None:
         """Process a message and update metrics."""
-        if channel.startswith("venue.") and "prices" in channel:
+        if stream.startswith("venue.") and stream.endswith(".prices"):
             self._metrics.venue_prices += 1
-        elif channel.startswith("oracle."):
+        elif stream.startswith("oracle."):
             self._metrics.oracle_prices += 1
-        elif channel == "opportunities.detected":
+        elif stream == "opportunities.detected":
             self._metrics.opportunities_detected += 1
-        elif channel == "trade.requests":
+        elif stream == "trade.requests":
             self._metrics.trade_requests += 1
-        elif channel == "trade.decisions":
-            # Try to parse approval status
-            if isinstance(data, str) and "approved" in data.lower():
-                if '"approved": true' in data.lower() or '"approved":true' in data.lower():
-                    self._metrics.risk_approvals += 1
-                else:
-                    self._metrics.risk_rejections += 1
-        elif channel == "trade.results":
+        elif stream == "trade.decisions":
+            # Check approval status from data dict
+            approved = data.get("approved", "")
+            if str(approved).lower() == "true":
+                self._metrics.risk_approvals += 1
+            else:
+                self._metrics.risk_rejections += 1
+        elif stream == "trade.results":
             self._metrics.paper_trades += 1
 
     def stop(self) -> None:
