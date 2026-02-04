@@ -231,7 +231,8 @@ class PolymarketAdapter(VenueAdapter):
             logger.warning(
                 "market_missing_prices",
                 market_id=market_id,
-                prices_count=len(prices),
+                prices_count=len(prices) if isinstance(prices, list) else 0,
+                prices_type=type(prices).__name__,
             )
             return None
 
