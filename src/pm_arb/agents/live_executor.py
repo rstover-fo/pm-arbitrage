@@ -140,10 +140,41 @@ class LiveExecutorAgent(BaseAgent):
             if not adapter.is_connected:
                 await adapter.connect()
 
+            # Pre-check: Verify sufficient balance before placing order
+            amount = Decimal(str(request.get("amount", "0")))
+            max_price = Decimal(str(request.get("max_price", "1")))
+            required_balance = amount * max_price  # Worst-case cost
+
+            try:
+                balance = await adapter.get_balance()
+                if balance < required_balance:
+                    error_msg = f"Insufficient balance: ${balance:.2f} < ${required_balance:.2f} required"
+                    logger.error(
+                        "insufficient_balance",
+                        request_id=request_id,
+                        required=str(required_balance),
+                        available=str(balance),
+                    )
+                    await self._publish_failure(request_id, error_msg, market_id=market_id, request=request)
+                    return
+            except RuntimeError as e:
+                # Not authenticated - can't check balance
+                logger.warning("balance_check_skipped", reason=str(e))
+
             # Place the order - use request data for trade details
             side = Side.BUY if request.get("side", "").lower() == "buy" else Side.SELL
-            amount = Decimal(str(request.get("amount", "0")))
+
+            # Resolve token_id if not provided in request
             token_id = request.get("token_id", "")
+            if not token_id:
+                outcome = request.get("outcome", "YES")
+                token_id = await adapter.get_token_id(market_id, outcome)
+                logger.info(
+                    "token_id_resolved",
+                    market_id=market_id,
+                    outcome=outcome,
+                    token_id=token_id,
+                )
 
             order = await adapter.place_order(
                 token_id=token_id,

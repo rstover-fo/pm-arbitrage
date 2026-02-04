@@ -131,6 +131,53 @@ class PolymarketAdapter(VenueAdapter):
         usdc_balance = balance_data.get("USDC", "0")
         return Decimal(str(usdc_balance))
 
+    async def get_token_id(self, market_id: str, outcome: str) -> str:
+        """Resolve token_id from market_id and outcome.
+
+        Args:
+            market_id: Market ID in format "polymarket:{condition_id}"
+            outcome: "YES" or "NO"
+
+        Returns:
+            Token ID for the specified outcome
+
+        Raises:
+            ValueError: If market not found or token ID unavailable
+        """
+        # Extract condition ID from market_id
+        external_id = market_id.split(":")[-1] if ":" in market_id else market_id
+
+        if not self._client:
+            raise RuntimeError("Not connected")
+
+        # Fetch market data from Gamma API
+        response = await self._client.get(
+            f"{GAMMA_API}/markets/{external_id}",
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        # Parse clobTokenIds
+        raw_token_ids = data.get("clobTokenIds", "[]")
+        if isinstance(raw_token_ids, str):
+            try:
+                token_ids = json.loads(raw_token_ids)
+            except json.JSONDecodeError:
+                token_ids = []
+        else:
+            token_ids = raw_token_ids if isinstance(raw_token_ids, list) else []
+
+        if len(token_ids) < 2:
+            raise ValueError(f"Market {market_id} has no CLOB token IDs")
+
+        # YES = index 0, NO = index 1
+        if outcome.upper() == "YES":
+            return str(token_ids[0])
+        elif outcome.upper() == "NO":
+            return str(token_ids[1])
+        else:
+            raise ValueError(f"Invalid outcome: {outcome}. Must be 'YES' or 'NO'")
+
     async def get_markets(self) -> list[Market]:
         """Fetch active markets from Polymarket."""
         raw_markets = await self._fetch_markets()
