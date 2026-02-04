@@ -46,6 +46,10 @@ packages = ["src/pm_arb"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "integration: marks tests requiring external services (deselect with '-m not integration')",
+    "slow: marks tests taking >5 seconds",
+]
 
 [tool.ruff]
 line-length = 100

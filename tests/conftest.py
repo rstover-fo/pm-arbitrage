@@ -12,6 +12,12 @@ import redis.asyncio as redis
 from pm_arb.core.config import settings
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    """Register custom markers."""
+    config.addinivalue_line("markers", "integration: requires external services")
+    config.addinivalue_line("markers", "slow: takes >5 seconds")
+
+
 @pytest.fixture(scope="session")
 def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
     """Create event loop for async tests."""

@@ -98,6 +98,7 @@ class StrategyAgent(BaseAgent):
             "outcome": trade_params["outcome"],
             "amount": str(amount),
             "max_price": str(trade_params["max_price"]),
+            "expected_edge": str(opportunity.get("expected_edge", "0")),
             "created_at": datetime.now(UTC).isoformat(),
         }
 
