@@ -24,17 +24,19 @@ async def test_live_data_streaming() -> None:
     mock_polymarket.is_connected = True
     mock_polymarket.connect = AsyncMock()
     mock_polymarket.disconnect = AsyncMock()
-    mock_polymarket.get_markets = AsyncMock(return_value=[
-        Market(
-            id="polymarket:btc-100k",
-            venue="polymarket",
-            external_id="0x123",
-            title="Will BTC exceed $100k?",
-            yes_price=Decimal("0.45"),
-            no_price=Decimal("0.55"),
-            last_updated=datetime.now(UTC),
-        )
-    ])
+    mock_polymarket.get_markets = AsyncMock(
+        return_value=[
+            Market(
+                id="polymarket:btc-100k",
+                venue="polymarket",
+                external_id="0x123",
+                title="Will BTC exceed $100k?",
+                yes_price=Decimal("0.45"),
+                no_price=Decimal("0.55"),
+                last_updated=datetime.now(UTC),
+            )
+        ]
+    )
 
     # Create mock Binance oracle
     mock_binance = MagicMock()
@@ -42,12 +44,14 @@ async def test_live_data_streaming() -> None:
     mock_binance.is_connected = True
     mock_binance.connect = AsyncMock()
     mock_binance.disconnect = AsyncMock()
-    mock_binance.get_current = AsyncMock(return_value=OracleData(
-        source="binance",
-        symbol="BTC",
-        value=Decimal("50000"),
-        timestamp=datetime.now(UTC),
-    ))
+    mock_binance.get_current = AsyncMock(
+        return_value=OracleData(
+            source="binance",
+            symbol="BTC",
+            value=Decimal("50000"),
+            timestamp=datetime.now(UTC),
+        )
+    )
 
     # Create agents with mocked adapters
     venue_agent = VenueWatcherAgent(redis_url, mock_polymarket, poll_interval=0.1)

@@ -31,6 +31,7 @@ class LiveExecutorAgent(BaseAgent):
         self._credentials = credentials
         self._adapters: dict[str, PolymarketAdapter] = {}
         self._pending_requests: dict[str, dict[str, Any]] = {}
+        self._pending_decisions: dict[str, dict[str, Any]] = {}  # Buffered early decisions
         self._db_pool = db_pool
         self._repo: PaperTradeRepository | None = None
         self._alerts = AlertService()
@@ -47,18 +48,34 @@ class LiveExecutorAgent(BaseAgent):
         return ["trade.decisions", "trade.requests"]
 
     async def handle_message(self, channel: str, data: dict[str, Any]) -> None:
-        """Process trade decisions and requests."""
+        """Process trade decisions and requests.
+
+        Handles race condition where a decision may arrive before its
+        corresponding request. Decisions are buffered and matched when
+        the request arrives.
+        """
         if channel == "trade.requests":
             # Cache request for later lookup
             request_id = data.get("id", "")
             if request_id:
                 self._pending_requests[request_id] = data
+                # Check if a decision arrived early for this request
+                if request_id in self._pending_decisions:
+                    decision = self._pending_decisions.pop(request_id)
+                    if decision.get("approved", False):
+                        await self._execute_trade(decision)
+                    else:
+                        await self._handle_rejection(decision)
         elif channel == "trade.decisions":
-            # Only execute if approved
-            if data.get("approved", False):
-                await self._execute_trade(data)
+            request_id = data.get("request_id", "")
+            if request_id and request_id not in self._pending_requests:
+                # Decision arrived before request — buffer it
+                self._pending_decisions[request_id] = data
             else:
-                await self._handle_rejection(data)
+                if data.get("approved", False):
+                    await self._execute_trade(data)
+                else:
+                    await self._handle_rejection(data)
 
     def _get_adapter(self, venue: str) -> PolymarketAdapter:
         """Get or create adapter for venue."""
@@ -148,14 +165,18 @@ class LiveExecutorAgent(BaseAgent):
             try:
                 balance = await adapter.get_balance()
                 if balance < required_balance:
-                    error_msg = f"Insufficient balance: ${balance:.2f} < ${required_balance:.2f} required"
+                    error_msg = (
+                        f"Insufficient balance: ${balance:.2f} < ${required_balance:.2f} required"
+                    )
                     logger.error(
                         "insufficient_balance",
                         request_id=request_id,
                         required=str(required_balance),
                         available=str(balance),
                     )
-                    await self._publish_failure(request_id, error_msg, market_id=market_id, request=request)
+                    await self._publish_failure(
+                        request_id, error_msg, market_id=market_id, request=request
+                    )
                     return
             except RuntimeError as e:
                 # Not authenticated - can't check balance

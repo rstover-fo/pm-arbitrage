@@ -117,9 +117,7 @@ class MarketMatcher:
             return []
 
         # Build prompt
-        titles_text = "\n".join(
-            f"{i+1}. \"{m.title}\"" for i, m in enumerate(markets)
-        )
+        titles_text = "\n".join(f'{i + 1}. "{m.title}"' for i, m in enumerate(markets))
 
         prompt = f"""Extract crypto price threshold info from these market titles.
 Return a JSON array with one object per title. Each object should have:

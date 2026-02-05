@@ -26,6 +26,7 @@ class PaperExecutorAgent(BaseAgent):
         self.name = "paper-executor"
         super().__init__(redis_url)
         self._pending_requests: dict[str, dict[str, Any]] = {}
+        self._pending_decisions: dict[str, dict[str, Any]] = {}  # Buffered early decisions
         self._trades: list[Trade] = []
         self._db_pool = db_pool
         self._repo: PaperTradeRepository | None = None
@@ -69,13 +70,27 @@ class PaperExecutorAgent(BaseAgent):
         return ["trade.decisions", "trade.requests"]
 
     async def handle_message(self, channel: str, data: dict[str, Any]) -> None:
-        """Process trade decisions and requests."""
+        """Process trade decisions and requests.
+
+        Handles race condition where a decision may arrive before its
+        corresponding request. Decisions are buffered and matched when
+        the request arrives.
+        """
         if channel == "trade.requests":
             request_id = data.get("id", "")
             if request_id:
                 self._pending_requests[request_id] = data
+                # Check if a decision arrived early for this request
+                if request_id in self._pending_decisions:
+                    decision = self._pending_decisions.pop(request_id)
+                    await self._process_decision(decision)
         elif channel == "trade.decisions":
-            await self._process_decision(data)
+            request_id = data.get("request_id", "")
+            if request_id and request_id not in self._pending_requests:
+                # Decision arrived before request — buffer it
+                self._pending_decisions[request_id] = data
+            else:
+                await self._process_decision(data)
 
     async def _process_decision(self, data: dict[str, Any]) -> None:
         """Process a risk decision."""
@@ -115,14 +130,27 @@ class PaperExecutorAgent(BaseAgent):
         if request_id in self._pending_requests:
             del self._pending_requests[request_id]
 
+    def _estimate_taker_fee(self, price: Decimal) -> Decimal:
+        """Estimate taker fee for 15-min crypto markets.
+
+        Uses the same formula as the opportunity scanner:
+            fee_rate = 0.0312 * (0.5 - abs(price - 0.5))
+        """
+        distance_from_edge = Decimal("0.5") - abs(price - Decimal("0.5"))
+        return Decimal("0.0312") * distance_from_edge
+
+    def _is_fee_market(self, market_id: str, opportunity_type: str) -> bool:
+        """Check if market charges taker fees (15-min crypto markets)."""
+        return opportunity_type == "oracle_lag"
+
     async def _execute_paper_trade(self, request_id: str) -> None:
-        """Simulate trade execution."""
+        """Simulate trade execution with realistic fees and PnL."""
         request = self._pending_requests.get(request_id)
         if not request:
             logger.warning("no_pending_request", request_id=request_id)
             return
 
-        fill_price = Decimal(str(request.get("max_price", "0.50")))
+        max_price = Decimal(str(request.get("max_price", "0.50")))
         amount = Decimal(str(request.get("amount", "0")))
         market_id = request.get("market_id", "")
         venue = market_id.split(":")[0] if ":" in market_id else "unknown"
@@ -130,6 +158,17 @@ class PaperExecutorAgent(BaseAgent):
         opportunity_id = request.get("opportunity_id", "unknown")
         opportunity_type = request.get("opportunity_type", "unknown")
         expected_edge = Decimal(str(request.get("expected_edge", "0")))
+
+        # Simulate realistic slippage: 0.2% adverse price movement
+        slippage = max_price * Decimal("0.002")
+        fill_price = max_price + slippage  # Slightly worse fill for buys
+
+        # Calculate realistic fees based on market type
+        if self._is_fee_market(market_id, opportunity_type):
+            fee_rate = self._estimate_taker_fee(fill_price)
+        else:
+            fee_rate = Decimal("0")
+        fees = amount * fee_rate
 
         trade = Trade(
             id=f"paper-{uuid4().hex[:8]}",
@@ -140,7 +179,7 @@ class PaperExecutorAgent(BaseAgent):
             outcome=request.get("outcome", "YES"),
             amount=amount,
             price=fill_price,
-            fees=amount * Decimal("0.001"),
+            fees=fees,
             status=TradeStatus.FILLED,
         )
 
@@ -158,14 +197,17 @@ class PaperExecutorAgent(BaseAgent):
                 outcome=trade.outcome,
                 quantity=amount,
                 price=fill_price,
-                fees=trade.fees,
+                fees=fees,
                 expected_edge=expected_edge,
                 strategy_id=strategy,
                 risk_approved=True,
             )
             persisted = db_id is not None
 
-        simulated_pnl = amount * Decimal("0.05")
+        # Estimated PnL based on detected edge (already net of fees from scanner)
+        # Subtract slippage cost and any additional fee delta
+        slippage_cost = amount * Decimal("0.002")
+        estimated_pnl = (amount * abs(expected_edge)) - slippage_cost
 
         logger.info(
             "paper_trade_executed",
@@ -176,11 +218,15 @@ class PaperExecutorAgent(BaseAgent):
             outcome=trade.outcome,
             amount=str(trade.amount),
             price=str(trade.price),
+            fees=str(fees),
+            fee_rate=str(fee_rate),
+            expected_edge=str(expected_edge),
+            estimated_pnl=str(estimated_pnl),
             persisted=persisted,
         )
 
         await self._publish_trade_result(
-            trade, strategy=strategy, pnl=simulated_pnl, paper_trade=True
+            trade, strategy=strategy, pnl=estimated_pnl, paper_trade=True
         )
 
         del self._pending_requests[request_id]

@@ -43,8 +43,8 @@ async def test_detects_oracle_lag_opportunity() -> None:
         direction="above",
     )
 
-    # Simulate: BTC jumps to $105k but market still prices YES at 50%
-    # This is a buying opportunity - BTC is already above threshold
+    # Simulate: BTC jumps to $110k but market still prices YES at 75%
+    # Real oracle lag: price should be ~95% but market is slow to react
     published: list[tuple[str, dict[str, Any]]] = []
 
     async def capture_publish(channel: str, data: dict[str, Any]) -> str:
@@ -53,35 +53,35 @@ async def test_detects_oracle_lag_opportunity() -> None:
 
     agent.publish = capture_publish  # type: ignore[method-assign]
 
-    # Feed oracle data showing BTC at $105k
+    # Feed oracle data showing BTC at $110k (10% above threshold)
     await agent._handle_oracle_data(
         "oracle.binance.BTC",
         {
             "source": "binance",
             "symbol": "BTC",
-            "value": "105000",
+            "value": "110000",
             "timestamp": datetime.now(UTC).isoformat(),
         },
     )
 
-    # Feed market data showing YES still at 50%
+    # Feed market data showing YES at 75% (lagging behind fair value ~95%)
     await agent._handle_venue_price(
         "venue.polymarket.prices",
         {
             "market_id": "polymarket:btc-above-100k",
             "venue": "polymarket",
             "title": "Will BTC be above $100k?",
-            "yes_price": "0.50",
-            "no_price": "0.50",
+            "yes_price": "0.75",
+            "no_price": "0.25",
         },
     )
 
-    # Should detect opportunity
+    # Should detect ~20% edge (fair 0.95 - current 0.75)
     assert len(published) == 1
     assert published[0][0] == "opportunities.detected"
     opp = published[0][1]
     assert opp["type"] == OpportunityType.ORACLE_LAG.value
-    assert Decimal(opp["expected_edge"]) > Decimal("0.40")  # ~45% edge (should be ~95% not 50%)
+    assert Decimal(opp["expected_edge"]) > Decimal("0.10")
 
 
 @pytest.mark.asyncio
@@ -145,6 +145,7 @@ async def test_detects_cross_platform_opportunity() -> None:
 @pytest.mark.asyncio
 async def test_signal_strength_increases_with_edge() -> None:
     """Signal strength should increase with larger edge."""
+    # Use two separate markets to avoid cooldown dedup
     agent = OpportunityScannerAgent(
         redis_url="redis://localhost:6379",
         venue_channels=["venue.polymarket.prices"],
@@ -154,13 +155,19 @@ async def test_signal_strength_increases_with_edge() -> None:
     )
 
     agent.register_market_oracle_mapping(
-        market_id="polymarket:btc-above-100k",
+        market_id="polymarket:btc-above-100k-a",
+        oracle_symbol="BTC",
+        threshold=Decimal("100000"),
+        direction="above",
+    )
+    agent.register_market_oracle_mapping(
+        market_id="polymarket:btc-above-100k-b",
         oracle_symbol="BTC",
         threshold=Decimal("100000"),
         direction="above",
     )
 
-    published = []
+    published: list[tuple[str, dict[str, Any]]] = []
 
     async def capture_publish(channel: str, data: dict[str, Any]) -> str:
         published.append((channel, data))
@@ -169,6 +176,7 @@ async def test_signal_strength_increases_with_edge() -> None:
     agent.publish = capture_publish  # type: ignore[method-assign]
 
     # Test 1: BTC at $110k (10% above threshold) - high signal
+    # Market at 0.80 → edge ~0.15, under 30% cap
     await agent._handle_oracle_data(
         "oracle.binance.BTC",
         {
@@ -181,17 +189,18 @@ async def test_signal_strength_increases_with_edge() -> None:
     await agent._handle_venue_price(
         "venue.polymarket.prices",
         {
-            "market_id": "polymarket:btc-above-100k",
+            "market_id": "polymarket:btc-above-100k-a",
             "venue": "polymarket",
             "title": "BTC>100k",
-            "yes_price": "0.50",
-            "no_price": "0.50",
+            "yes_price": "0.80",
+            "no_price": "0.20",
         },
     )
 
     high_edge_signal = Decimal(published[0][1]["signal_strength"])
 
     # Test 2: BTC at $102k (2% above threshold) - lower signal
+    # Market at 0.55 → edge ~0.15, under 30% cap
     published.clear()
     await agent._handle_oracle_data(
         "oracle.binance.BTC",
@@ -205,11 +214,11 @@ async def test_signal_strength_increases_with_edge() -> None:
     await agent._handle_venue_price(
         "venue.polymarket.prices",
         {
-            "market_id": "polymarket:btc-above-100k",
+            "market_id": "polymarket:btc-above-100k-b",
             "venue": "polymarket",
             "title": "BTC>100k",
-            "yes_price": "0.50",
-            "no_price": "0.50",
+            "yes_price": "0.55",
+            "no_price": "0.45",
         },
     )
 
@@ -260,8 +269,8 @@ async def test_filters_low_signal_opportunities() -> None:
             "market_id": "polymarket:btc-above-100k",
             "venue": "polymarket",
             "title": "BTC>100k",
-            "yes_price": "0.50",
-            "no_price": "0.50",
+            "yes_price": "0.45",
+            "no_price": "0.55",
         },
     )
 
@@ -577,9 +586,7 @@ async def test_calculate_net_edge_with_fees(
     gross_edge = Decimal("0.05")  # 5% gross edge
     entry_price = Decimal("0.50")
 
-    net_edge, fee_rate = scanner_with_fees._calculate_net_edge(
-        gross_edge, fee_market, entry_price
-    )
+    net_edge, fee_rate = scanner_with_fees._calculate_net_edge(gross_edge, fee_market, entry_price)
 
     # Fee at 0.50 = 0.0156
     assert fee_rate == Decimal("0.0156")
@@ -667,3 +674,244 @@ async def test_fee_filters_marginal_opportunity() -> None:
     # Should NOT detect opportunity due to fees eating the edge
     # (The exact behavior depends on how the signal strength interacts)
     # This test validates the fee filtering logic is applied
+
+
+# =============================================================================
+# Resolved Market Filter Tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_filters_resolved_market_yes_near_zero() -> None:
+    """Should not detect opportunity on a market where YES is near zero (resolved NO)."""
+    agent = OpportunityScannerAgent(
+        redis_url="redis://localhost:6379",
+        venue_channels=["venue.polymarket.prices"],
+        oracle_channels=["oracle.binance.BTC"],
+        min_edge_pct=Decimal("0.01"),
+        min_signal_strength=Decimal("0.01"),
+    )
+
+    agent.register_market_oracle_mapping(
+        market_id="polymarket:btc-expired",
+        oracle_symbol="BTC",
+        threshold=Decimal("100000"),
+        direction="above",
+    )
+
+    published: list[tuple[str, dict[str, Any]]] = []
+
+    async def capture_publish(channel: str, data: dict[str, Any]) -> str:
+        published.append((channel, data))
+        return "mock-id"
+
+    agent.publish = capture_publish  # type: ignore[method-assign]
+
+    # Oracle says BTC is above threshold
+    await agent._handle_oracle_data(
+        "oracle.binance.BTC",
+        {
+            "source": "binance",
+            "symbol": "BTC",
+            "value": "110000",
+            "timestamp": datetime.now(UTC).isoformat(),
+        },
+    )
+
+    # Market YES is near zero — outcome already determined (time expired)
+    await agent._handle_venue_price(
+        "venue.polymarket.prices",
+        {
+            "market_id": "polymarket:btc-expired",
+            "venue": "polymarket",
+            "title": "BTC above $100k in 15 min?",
+            "yes_price": "0.001",
+            "no_price": "0.999",
+        },
+    )
+
+    # Should NOT detect — market is resolved
+    assert len(published) == 0
+
+
+@pytest.mark.asyncio
+async def test_filters_resolved_market_yes_near_one() -> None:
+    """Should not detect opportunity on a market where YES is near 1 (resolved YES)."""
+    agent = OpportunityScannerAgent(
+        redis_url="redis://localhost:6379",
+        venue_channels=["venue.polymarket.prices"],
+        oracle_channels=["oracle.binance.BTC"],
+        min_edge_pct=Decimal("0.01"),
+        min_signal_strength=Decimal("0.01"),
+    )
+
+    agent.register_market_oracle_mapping(
+        market_id="polymarket:btc-settled",
+        oracle_symbol="BTC",
+        threshold=Decimal("100000"),
+        direction="above",
+    )
+
+    published: list[tuple[str, dict[str, Any]]] = []
+
+    async def capture_publish(channel: str, data: dict[str, Any]) -> str:
+        published.append((channel, data))
+        return "mock-id"
+
+    agent.publish = capture_publish  # type: ignore[method-assign]
+
+    # Oracle says BTC is below threshold
+    await agent._handle_oracle_data(
+        "oracle.binance.BTC",
+        {
+            "source": "binance",
+            "symbol": "BTC",
+            "value": "90000",
+            "timestamp": datetime.now(UTC).isoformat(),
+        },
+    )
+
+    # Market YES at 0.99 — already resolved YES
+    await agent._handle_venue_price(
+        "venue.polymarket.prices",
+        {
+            "market_id": "polymarket:btc-settled",
+            "venue": "polymarket",
+            "title": "BTC above $100k in 15 min?",
+            "yes_price": "0.99",
+            "no_price": "0.01",
+        },
+    )
+
+    # Should NOT detect — market is resolved
+    assert len(published) == 0
+
+
+# =============================================================================
+# Edge Cap Tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_filters_incredible_edge() -> None:
+    """Should reject opportunities with edge > 30% (likely resolved markets)."""
+    agent = OpportunityScannerAgent(
+        redis_url="redis://localhost:6379",
+        venue_channels=["venue.polymarket.prices"],
+        oracle_channels=["oracle.binance.BTC"],
+        min_edge_pct=Decimal("0.01"),
+        min_signal_strength=Decimal("0.01"),
+    )
+
+    agent.register_market_oracle_mapping(
+        market_id="polymarket:btc-suspicious",
+        oracle_symbol="BTC",
+        threshold=Decimal("100000"),
+        direction="above",
+    )
+
+    published: list[tuple[str, dict[str, Any]]] = []
+
+    async def capture_publish(channel: str, data: dict[str, Any]) -> str:
+        published.append((channel, data))
+        return "mock-id"
+
+    agent.publish = capture_publish  # type: ignore[method-assign]
+
+    # Oracle far above threshold
+    await agent._handle_oracle_data(
+        "oracle.binance.BTC",
+        {
+            "source": "binance",
+            "symbol": "BTC",
+            "value": "115000",
+            "timestamp": datetime.now(UTC).isoformat(),
+        },
+    )
+
+    # Market YES at 0.50 → fair = 0.95, edge = 0.45 → over 30% cap
+    await agent._handle_venue_price(
+        "venue.polymarket.prices",
+        {
+            "market_id": "polymarket:btc-suspicious",
+            "venue": "polymarket",
+            "title": "BTC above $100k?",
+            "yes_price": "0.50",
+            "no_price": "0.50",
+        },
+    )
+
+    # Should NOT detect — edge too large to be credible
+    assert len(published) == 0
+
+
+# =============================================================================
+# Opportunity Deduplication Tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_deduplicates_opportunities_same_market() -> None:
+    """Should not emit duplicate opportunities for the same market within cooldown."""
+    agent = OpportunityScannerAgent(
+        redis_url="redis://localhost:6379",
+        venue_channels=["venue.polymarket.prices"],
+        oracle_channels=["oracle.binance.BTC"],
+        min_edge_pct=Decimal("0.01"),
+        min_signal_strength=Decimal("0.01"),
+    )
+
+    agent.register_market_oracle_mapping(
+        market_id="polymarket:btc-dedup",
+        oracle_symbol="BTC",
+        threshold=Decimal("100000"),
+        direction="above",
+    )
+
+    published: list[tuple[str, dict[str, Any]]] = []
+
+    async def capture_publish(channel: str, data: dict[str, Any]) -> str:
+        published.append((channel, data))
+        return "mock-id"
+
+    agent.publish = capture_publish  # type: ignore[method-assign]
+
+    # Oracle above threshold
+    await agent._handle_oracle_data(
+        "oracle.binance.BTC",
+        {
+            "source": "binance",
+            "symbol": "BTC",
+            "value": "110000",
+            "timestamp": datetime.now(UTC).isoformat(),
+        },
+    )
+
+    # First price update — should publish
+    await agent._handle_venue_price(
+        "venue.polymarket.prices",
+        {
+            "market_id": "polymarket:btc-dedup",
+            "venue": "polymarket",
+            "title": "BTC above $100k?",
+            "yes_price": "0.80",
+            "no_price": "0.20",
+        },
+    )
+
+    assert len(published) == 1
+
+    # Second price update (same market) — should be deduplicated
+    await agent._handle_venue_price(
+        "venue.polymarket.prices",
+        {
+            "market_id": "polymarket:btc-dedup",
+            "venue": "polymarket",
+            "title": "BTC above $100k?",
+            "yes_price": "0.79",
+            "no_price": "0.21",
+        },
+    )
+
+    # Still only 1 — second was suppressed by cooldown
+    assert len(published) == 1

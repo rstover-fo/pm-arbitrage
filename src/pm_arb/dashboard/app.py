@@ -353,9 +353,7 @@ def render_pilot_monitor() -> None:
                 pnl = row.get("pnl", 0)
                 pnl_color = "green" if pnl >= 0 else "red"
                 st.markdown(
-                    f"**{row['type']}**  \n"
-                    f"{row['trades']} trades · "
-                    f":{pnl_color}[${pnl:+,.2f}]"
+                    f"**{row['type']}**  \n{row['trades']} trades · :{pnl_color}[${pnl:+,.2f}]"
                 )
         else:
             st.info("No data yet.")
@@ -448,12 +446,15 @@ def render_how_it_works() -> None:
     # Why it works
     st.subheader("Why This Works")
 
-    st.code("""
+    st.code(
+        """
 Timeline:
 ---------*------------*------------*----------->
       BTC moves    We trade    Market corrects
         (0ms)       (50ms)       (2-5 sec)
-    """, language=None)
+    """,
+        language=None,
+    )
 
     st.markdown("""
     - **Binance** updates every millisecond

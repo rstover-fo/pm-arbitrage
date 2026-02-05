@@ -187,9 +187,7 @@ def stop(force: bool, timeout: int) -> None:
             console.print("[green]Pilot stopped[/green]")
         pid_file.unlink(missing_ok=True)
     else:
-        console.print(
-            f"[red]Pilot did not stop within {timeout}s. Use --force to kill.[/red]"
-        )
+        console.print(f"[red]Pilot did not stop within {timeout}s. Use --force to kill.[/red]")
 
 
 @cli.command()

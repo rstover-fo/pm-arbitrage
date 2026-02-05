@@ -12,12 +12,13 @@ from pm_arb.pilot import PilotOrchestrator
 @pytest.mark.asyncio
 async def test_orchestrator_starts_agents(redis_url, test_db_pool):
     """Test that orchestrator starts all agents."""
-    with patch("pm_arb.pilot.PolymarketAdapter") as mock_poly_cls, \
-         patch("pm_arb.pilot.CoinGeckoOracle") as mock_coingecko_cls, \
-         patch("pm_arb.pilot.MarketMatcher") as mock_matcher_cls, \
-         patch("pm_arb.pilot.init_db", new_callable=AsyncMock), \
-         patch("pm_arb.pilot.get_pool", new_callable=AsyncMock):
-
+    with (
+        patch("pm_arb.pilot.PolymarketAdapter") as mock_poly_cls,
+        patch("pm_arb.pilot.CoinGeckoOracle") as mock_coingecko_cls,
+        patch("pm_arb.pilot.MarketMatcher") as mock_matcher_cls,
+        patch("pm_arb.pilot.init_db", new_callable=AsyncMock),
+        patch("pm_arb.pilot.get_pool", new_callable=AsyncMock),
+    ):
         # Configure mock Polymarket adapter
         mock_poly = AsyncMock()
         mock_poly.connect = AsyncMock()
@@ -63,12 +64,13 @@ async def test_orchestrator_starts_agents(redis_url, test_db_pool):
 @pytest.mark.asyncio
 async def test_orchestrator_health_check(redis_url, test_db_pool):
     """Test that orchestrator reports health status."""
-    with patch("pm_arb.pilot.PolymarketAdapter") as mock_poly_cls, \
-         patch("pm_arb.pilot.CoinGeckoOracle") as mock_coingecko_cls, \
-         patch("pm_arb.pilot.MarketMatcher") as mock_matcher_cls, \
-         patch("pm_arb.pilot.init_db", new_callable=AsyncMock), \
-         patch("pm_arb.pilot.get_pool", new_callable=AsyncMock):
-
+    with (
+        patch("pm_arb.pilot.PolymarketAdapter") as mock_poly_cls,
+        patch("pm_arb.pilot.CoinGeckoOracle") as mock_coingecko_cls,
+        patch("pm_arb.pilot.MarketMatcher") as mock_matcher_cls,
+        patch("pm_arb.pilot.init_db", new_callable=AsyncMock),
+        patch("pm_arb.pilot.get_pool", new_callable=AsyncMock),
+    ):
         # Configure mock Polymarket adapter
         mock_poly = AsyncMock()
         mock_poly.connect = AsyncMock()
@@ -113,12 +115,13 @@ class TestPilotMarketMatching:
     @pytest.mark.asyncio
     async def test_matches_markets_before_scanning(self) -> None:
         """Should match markets after creating agents but before running."""
-        with patch("pm_arb.pilot.PolymarketAdapter") as mock_adapter_cls, \
-             patch("pm_arb.pilot.CoinGeckoOracle"), \
-             patch("pm_arb.pilot.MarketMatcher") as mock_matcher_cls, \
-             patch("pm_arb.pilot.init_db", new_callable=AsyncMock), \
-             patch("pm_arb.pilot.get_pool", new_callable=AsyncMock):
-
+        with (
+            patch("pm_arb.pilot.PolymarketAdapter") as mock_adapter_cls,
+            patch("pm_arb.pilot.CoinGeckoOracle"),
+            patch("pm_arb.pilot.MarketMatcher") as mock_matcher_cls,
+            patch("pm_arb.pilot.init_db", new_callable=AsyncMock),
+            patch("pm_arb.pilot.get_pool", new_callable=AsyncMock),
+        ):
             # Setup mock adapter
             mock_adapter = AsyncMock()
             mock_adapter.get_markets = AsyncMock(return_value=[])

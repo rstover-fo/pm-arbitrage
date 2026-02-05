@@ -40,25 +40,26 @@ async def test_scanner_detects_live_opportunities() -> None:
 
     scanner._publish_opportunity = capture_opportunity  # type: ignore[method-assign]
 
-    # Simulate venue price update (market says 40% chance BTC hits $100k)
+    # Simulate venue price update (market says 75% chance BTC hits $100k)
+    # Realistic scenario: market is lagging behind oracle by ~20%
     await scanner._handle_venue_price(
         "venue.test",
         {
             "market_id": "polymarket:btc-100k",
             "venue": "polymarket",
             "title": "Will BTC exceed $100k?",
-            "yes_price": "0.40",
-            "no_price": "0.60",
+            "yes_price": "0.75",
+            "no_price": "0.25",
         },
     )
 
-    # Simulate oracle showing BTC at $105k (above threshold - should be ~95%+ implied prob)
+    # Simulate oracle showing BTC at $110k (10% above threshold - fair value ~95%)
     await scanner._handle_oracle_data(
         "oracle.test",
         {
             "source": "binance",
             "symbol": "BTC",
-            "value": "105000",
+            "value": "110000",
             "timestamp": datetime.now(UTC).isoformat(),
         },
     )

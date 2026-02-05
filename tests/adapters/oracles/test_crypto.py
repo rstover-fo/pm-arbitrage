@@ -31,7 +31,9 @@ async def test_subscribe_single_symbol_uses_ws_endpoint() -> None:
     """Single symbol subscription should use /ws/<stream> endpoint."""
     oracle = BinanceOracle()
 
-    with patch("pm_arb.adapters.oracles.crypto.websockets.connect", new_callable=AsyncMock) as mock_connect:
+    with patch(
+        "pm_arb.adapters.oracles.crypto.websockets.connect", new_callable=AsyncMock
+    ) as mock_connect:
         mock_connect.return_value = AsyncMock()
         await oracle.subscribe(["BTC"])
 
@@ -47,7 +49,9 @@ async def test_subscribe_multiple_symbols_uses_stream_endpoint() -> None:
     """Multiple symbol subscription should use /stream?streams= endpoint."""
     oracle = BinanceOracle()
 
-    with patch("pm_arb.adapters.oracles.crypto.websockets.connect", new_callable=AsyncMock) as mock_connect:
+    with patch(
+        "pm_arb.adapters.oracles.crypto.websockets.connect", new_callable=AsyncMock
+    ) as mock_connect:
         mock_connect.return_value = AsyncMock()
         await oracle.subscribe(["BTC", "ETH", "SOL"])
 
