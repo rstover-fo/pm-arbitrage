@@ -1,5 +1,6 @@
 """Tests for crypto oracle adapter."""
 
+import json
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
@@ -61,3 +62,66 @@ async def test_subscribe_multiple_symbols_uses_stream_endpoint() -> None:
         assert "btcusdt@ticker" in call_url
         assert "ethusdt@ticker" in call_url
         assert "solusdt@ticker" in call_url
+
+
+def test_supports_streaming() -> None:
+    """BinanceOracle should report streaming support."""
+    oracle = BinanceOracle()
+    assert oracle.supports_streaming is True
+
+
+@pytest.mark.asyncio
+async def test_stream_unwraps_multi_stream_wrapper() -> None:
+    """Multi-stream messages have a {"stream": ..., "data": {...}} wrapper."""
+    oracle = BinanceOracle()
+
+    # Simulate multi-stream wrapped message
+    wrapped = json.dumps(
+        {
+            "stream": "btcusdt@ticker",
+            "data": {
+                "s": "BTCUSDT",
+                "c": "65432.10",
+                "h": "66000.00",
+                "l": "64000.00",
+                "v": "12345.67",
+            },
+        }
+    )
+
+    mock_ws = AsyncMock()
+    mock_ws.__aiter__ = lambda self: self
+    mock_ws.__anext__ = AsyncMock(side_effect=[wrapped, StopAsyncIteration])
+    oracle._ws = mock_ws
+
+    results = [data async for data in oracle.stream()]
+    assert len(results) == 1
+    assert results[0].symbol == "BTC"
+    assert results[0].value == Decimal("65432.10")
+
+
+@pytest.mark.asyncio
+async def test_stream_passthrough_single_stream() -> None:
+    """Single-stream messages have no wrapper — data is at top level."""
+    oracle = BinanceOracle()
+
+    # Simulate single-stream message (no wrapper)
+    raw = json.dumps(
+        {
+            "s": "ETHUSDT",
+            "c": "3456.78",
+            "h": "3500.00",
+            "l": "3400.00",
+            "v": "98765.43",
+        }
+    )
+
+    mock_ws = AsyncMock()
+    mock_ws.__aiter__ = lambda self: self
+    mock_ws.__anext__ = AsyncMock(side_effect=[raw, StopAsyncIteration])
+    oracle._ws = mock_ws
+
+    results = [data async for data in oracle.stream()]
+    assert len(results) == 1
+    assert results[0].symbol == "ETH"
+    assert results[0].value == Decimal("3456.78")

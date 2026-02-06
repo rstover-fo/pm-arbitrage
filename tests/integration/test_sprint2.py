@@ -4,7 +4,7 @@ import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
 import pytest
 
@@ -38,12 +38,13 @@ async def test_live_data_streaming() -> None:
         ]
     )
 
-    # Create mock Binance oracle
+    # Create mock Binance oracle (polling mode for this test)
     mock_binance = MagicMock()
     mock_binance.name = "binance"
     mock_binance.is_connected = True
     mock_binance.connect = AsyncMock()
     mock_binance.disconnect = AsyncMock()
+    type(mock_binance).supports_streaming = PropertyMock(return_value=False)
     mock_binance.get_current = AsyncMock(
         return_value=OracleData(
             source="binance",

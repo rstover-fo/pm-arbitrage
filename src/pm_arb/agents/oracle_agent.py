@@ -38,18 +38,23 @@ class OracleAgent(BaseAgent):
         pass
 
     async def run(self) -> None:
-        """Override run to add oracle connection and polling."""
+        """Override run to add oracle connection and streaming/polling."""
         await self._oracle.connect()
+        self._running = True
+        self._stop_event.clear()
         try:
             # Start base agent in background for system commands
             base_task = asyncio.create_task(super().run())
 
-            # Poll loop
-            while self._running or not self._stop_event.is_set():
-                if self._stop_event.is_set():
-                    break
-                await self._poll_and_publish()
-                await asyncio.sleep(self._poll_interval)
+            if self._oracle.supports_streaming:
+                await self._stream_with_reconnect()
+            else:
+                # Poll loop
+                while self._running or not self._stop_event.is_set():
+                    if self._stop_event.is_set():
+                        break
+                    await self._poll_and_publish()
+                    await asyncio.sleep(self._poll_interval)
 
             # Cancel base task when we're done
             base_task.cancel()
@@ -59,6 +64,34 @@ class OracleAgent(BaseAgent):
                 pass
         finally:
             await self._oracle.disconnect()
+
+    async def _stream_with_reconnect(self) -> None:
+        """Stream oracle data with automatic reconnection on failure."""
+        backoff = 1.0
+        max_backoff = 30.0
+
+        while self._running and not self._stop_event.is_set():
+            try:
+                await self._oracle.subscribe(self._symbols)
+                backoff = 1.0  # Reset on successful connection
+
+                async for data in self._oracle.stream():
+                    if self._stop_event.is_set():
+                        break
+                    await self._publish_value(data)
+                    self._last_values[data.symbol] = data
+
+            except Exception as e:
+                if self._stop_event.is_set():
+                    break
+                logger.warning(
+                    "oracle_stream_disconnected",
+                    agent=self.name,
+                    error=str(e),
+                    reconnect_in=backoff,
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, max_backoff)
 
     async def _poll_and_publish(self) -> None:
         """Fetch current values and publish updates."""

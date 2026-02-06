@@ -14,7 +14,7 @@ async def test_orchestrator_starts_agents(redis_url, test_db_pool):
     """Test that orchestrator starts all agents."""
     with (
         patch("pm_arb.pilot.PolymarketAdapter") as mock_poly_cls,
-        patch("pm_arb.pilot.CoinGeckoOracle") as mock_coingecko_cls,
+        patch("pm_arb.pilot.BinanceOracle") as mock_binance_cls,
         patch("pm_arb.pilot.MarketMatcher") as mock_matcher_cls,
         patch("pm_arb.pilot.init_db", new_callable=AsyncMock),
         patch("pm_arb.pilot.get_pool", new_callable=AsyncMock),
@@ -27,10 +27,10 @@ async def test_orchestrator_starts_agents(redis_url, test_db_pool):
         mock_poly.is_connected = True
         mock_poly_cls.return_value = mock_poly
 
-        # Configure mock CoinGecko oracle
-        mock_coingecko = MagicMock()
-        mock_coingecko.set_symbols = MagicMock()
-        mock_coingecko_cls.return_value = mock_coingecko
+        # Configure mock Binance oracle
+        mock_binance = MagicMock()
+        mock_binance.name = "binance"
+        mock_binance_cls.return_value = mock_binance
 
         # Configure mock matcher
         mock_matcher = MagicMock()
@@ -66,7 +66,7 @@ async def test_orchestrator_health_check(redis_url, test_db_pool):
     """Test that orchestrator reports health status."""
     with (
         patch("pm_arb.pilot.PolymarketAdapter") as mock_poly_cls,
-        patch("pm_arb.pilot.CoinGeckoOracle") as mock_coingecko_cls,
+        patch("pm_arb.pilot.BinanceOracle") as mock_binance_cls,
         patch("pm_arb.pilot.MarketMatcher") as mock_matcher_cls,
         patch("pm_arb.pilot.init_db", new_callable=AsyncMock),
         patch("pm_arb.pilot.get_pool", new_callable=AsyncMock),
@@ -79,10 +79,10 @@ async def test_orchestrator_health_check(redis_url, test_db_pool):
         mock_poly.is_connected = True
         mock_poly_cls.return_value = mock_poly
 
-        # Configure mock CoinGecko oracle
-        mock_coingecko = MagicMock()
-        mock_coingecko.set_symbols = MagicMock()
-        mock_coingecko_cls.return_value = mock_coingecko
+        # Configure mock Binance oracle
+        mock_binance = MagicMock()
+        mock_binance.name = "binance"
+        mock_binance_cls.return_value = mock_binance
 
         # Configure mock matcher
         mock_matcher = MagicMock()
@@ -117,7 +117,7 @@ class TestPilotMarketMatching:
         """Should match markets after creating agents but before running."""
         with (
             patch("pm_arb.pilot.PolymarketAdapter") as mock_adapter_cls,
-            patch("pm_arb.pilot.CoinGeckoOracle"),
+            patch("pm_arb.pilot.BinanceOracle"),
             patch("pm_arb.pilot.MarketMatcher") as mock_matcher_cls,
             patch("pm_arb.pilot.init_db", new_callable=AsyncMock),
             patch("pm_arb.pilot.get_pool", new_callable=AsyncMock),
