@@ -51,7 +51,7 @@ async def test_adapter_get_balance(mock_credentials: PolymarketCredentials) -> N
         patch("pm_arb.adapters.venues.polymarket.ApiCreds") as mock_creds,
     ):
         mock_instance = MagicMock()
-        mock_instance.get_balance.return_value = {"USDC": "100.50"}
+        mock_instance.get_balance_allowance.return_value = {"balance": "100.50"}
         mock_clob.return_value = mock_instance
         mock_creds.return_value = MagicMock()
 

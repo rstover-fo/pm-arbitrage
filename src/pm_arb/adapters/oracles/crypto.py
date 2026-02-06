@@ -31,6 +31,11 @@ class BinanceOracle(OracleAdapter):
         self._client: httpx.AsyncClient | None = None
         self._ws: ClientConnection | None = None
         self._subscribed_symbols: list[str] = []
+        self._stream_url: str | None = None
+
+    @property
+    def supports_streaming(self) -> bool:
+        return True
 
     async def connect(self) -> None:
         """Initialize HTTP client."""
@@ -90,6 +95,7 @@ class BinanceOracle(OracleAdapter):
         else:
             stream_url = f"wss://stream.binance.us:9443/stream?streams={'/'.join(streams)}"
 
+        self._stream_url = stream_url
         self._ws = await websockets.connect(stream_url)
         logger.info("binance_ws_subscribed", symbols=symbols, url=stream_url)
 
@@ -100,6 +106,10 @@ class BinanceOracle(OracleAdapter):
 
         async for message in self._ws:
             data = json.loads(message)
+
+            # Multi-stream format wraps payload: {"stream": "...", "data": {...}}
+            if "data" in data and "stream" in data:
+                data = data["data"]
 
             # Extract symbol from stream name (e.g., "btcusdt" -> "BTC")
             symbol = data.get("s", "").replace("USDT", "")

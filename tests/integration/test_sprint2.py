@@ -4,7 +4,7 @@ import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
 import pytest
 
@@ -24,30 +24,35 @@ async def test_live_data_streaming() -> None:
     mock_polymarket.is_connected = True
     mock_polymarket.connect = AsyncMock()
     mock_polymarket.disconnect = AsyncMock()
-    mock_polymarket.get_markets = AsyncMock(return_value=[
-        Market(
-            id="polymarket:btc-100k",
-            venue="polymarket",
-            external_id="0x123",
-            title="Will BTC exceed $100k?",
-            yes_price=Decimal("0.45"),
-            no_price=Decimal("0.55"),
-            last_updated=datetime.now(UTC),
-        )
-    ])
+    mock_polymarket.get_markets = AsyncMock(
+        return_value=[
+            Market(
+                id="polymarket:btc-100k",
+                venue="polymarket",
+                external_id="0x123",
+                title="Will BTC exceed $100k?",
+                yes_price=Decimal("0.45"),
+                no_price=Decimal("0.55"),
+                last_updated=datetime.now(UTC),
+            )
+        ]
+    )
 
-    # Create mock Binance oracle
+    # Create mock Binance oracle (polling mode for this test)
     mock_binance = MagicMock()
     mock_binance.name = "binance"
     mock_binance.is_connected = True
     mock_binance.connect = AsyncMock()
     mock_binance.disconnect = AsyncMock()
-    mock_binance.get_current = AsyncMock(return_value=OracleData(
-        source="binance",
-        symbol="BTC",
-        value=Decimal("50000"),
-        timestamp=datetime.now(UTC),
-    ))
+    type(mock_binance).supports_streaming = PropertyMock(return_value=False)
+    mock_binance.get_current = AsyncMock(
+        return_value=OracleData(
+            source="binance",
+            symbol="BTC",
+            value=Decimal("50000"),
+            timestamp=datetime.now(UTC),
+        )
+    )
 
     # Create agents with mocked adapters
     venue_agent = VenueWatcherAgent(redis_url, mock_polymarket, poll_interval=0.1)

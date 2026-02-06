@@ -29,6 +29,15 @@ DURATION_PATTERNS = [
     r"15\s*minute",
 ]
 
+# Threshold below which a market is considered effectively resolved
+RESOLVED_PRICE_THRESHOLD = Decimal("0.02")
+
+# Cooldown in seconds before re-emitting an opportunity for the same market
+OPPORTUNITY_COOLDOWN_SECONDS = 60
+
+# Maximum credible edge — anything above this is likely a resolved market
+MAX_CREDIBLE_EDGE = Decimal("0.30")
+
 
 class OpportunityScannerAgent(BaseAgent):
     """Scans for arbitrage opportunities across venues and oracles."""
@@ -60,6 +69,9 @@ class OpportunityScannerAgent(BaseAgent):
 
         # Multi-outcome markets
         self._multi_outcome_markets: dict[str, MultiOutcomeMarket] = {}
+
+        # Opportunity deduplication cooldown: market_id -> last emit time
+        self._last_opportunity_time: dict[str, datetime] = {}
 
     def get_subscriptions(self) -> list[str]:
         """Subscribe to venue prices and oracle data."""
@@ -228,6 +240,15 @@ class OpportunityScannerAgent(BaseAgent):
         threshold_info: dict[str, Any],
     ) -> None:
         """Check if market price lags behind oracle reality."""
+        # Skip stale markets — zero-priced markets produce phantom signals
+        if self._is_stale_market(market):
+            return
+
+        # Skip resolved markets — near-0 or near-1 prices indicate the outcome
+        # is already determined (e.g., 15-min market expired)
+        if self._is_resolved_market(market):
+            return
+
         threshold = threshold_info["threshold"]
         direction = threshold_info["direction"]
 
@@ -275,6 +296,17 @@ class OpportunityScannerAgent(BaseAgent):
                     fee_rate=str(fee_rate),
                 )
             return  # Not enough edge after fees
+
+        # Cap edge at credible maximum — anything above 30% is likely a
+        # resolved market that slipped past the resolved-market filter
+        if abs(net_edge) > MAX_CREDIBLE_EDGE:
+            logger.debug(
+                "opportunity_filtered_incredible_edge",
+                market_id=market.id,
+                net_edge=str(net_edge),
+                current_yes=str(current_yes),
+            )
+            return
 
         # Calculate signal strength based on oracle distance from threshold
         signal_strength = min(Decimal("1.0"), distance_pct * 10)
@@ -356,11 +388,35 @@ class OpportunityScannerAgent(BaseAgent):
 
         await self._publish_opportunity(opportunity)
 
+    def _is_stale_market(self, market: Market) -> bool:
+        """Check if market has no meaningful price data.
+
+        Markets with both prices at or near zero are dead/inactive and
+        produce phantom arbitrage signals.
+        """
+        min_price = Decimal("0.01")
+        return market.yes_price < min_price and market.no_price < min_price
+
+    def _is_resolved_market(self, market: Market) -> bool:
+        """Check if market outcome is already determined.
+
+        A market with YES near 0 or YES near 1 has effectively resolved.
+        These produce phantom oracle-lag signals because the oracle still
+        sees the condition being met, but the market has already settled.
+        """
+        return market.yes_price < RESOLVED_PRICE_THRESHOLD or market.yes_price > (
+            Decimal("1") - RESOLVED_PRICE_THRESHOLD
+        )
+
     async def _check_single_condition_arb(self, market: Market) -> None:
         """Check if YES + NO < 1.0 (simple mispricing).
 
         This captures the $10.5M opportunity class from research.
         """
+        # Skip stale markets with no real price data
+        if self._is_stale_market(market):
+            return
+
         price_sum = market.yes_price + market.no_price
 
         # Calculate edge (how much under $1.00)
@@ -449,14 +505,28 @@ class OpportunityScannerAgent(BaseAgent):
 
         await self._publish_opportunity(opportunity)
 
+    def _is_on_cooldown(self, market_id: str) -> bool:
+        """Check if opportunity for this market is within cooldown period."""
+        last_time = self._last_opportunity_time.get(market_id)
+        if last_time is None:
+            return False
+        elapsed = (datetime.now(UTC) - last_time).total_seconds()
+        return elapsed < OPPORTUNITY_COOLDOWN_SECONDS
+
     async def _publish_opportunity(self, opportunity: Opportunity) -> None:
-        """Publish detected opportunity."""
+        """Publish detected opportunity with per-market cooldown."""
+        # Deduplicate: skip if we recently emitted for the same market(s)
+        primary_market = opportunity.markets[0] if opportunity.markets else ""
+        if primary_market and self._is_on_cooldown(primary_market):
+            return
+
         logger.info(
             "opportunity_detected",
             opp_id=opportunity.id,
             type=opportunity.type.value,
             edge=str(opportunity.expected_edge),
             signal=str(opportunity.signal_strength),
+            markets=opportunity.markets,
         )
 
         await self.publish(
@@ -473,3 +543,7 @@ class OpportunityScannerAgent(BaseAgent):
                 "metadata": opportunity.metadata,
             },
         )
+
+        # Record cooldown
+        if primary_market:
+            self._last_opportunity_time[primary_market] = datetime.now(UTC)

@@ -25,13 +25,15 @@ CLOB_API = "https://clob.polymarket.com"
 # Optional: Import CLOB client if available
 try:
     from py_clob_client.client import ClobClient
-    from py_clob_client.clob_types import ApiCreds
+    from py_clob_client.clob_types import ApiCreds, AssetType, BalanceAllowanceParams
 
     HAS_CLOB_CLIENT = True
 except ImportError:
     HAS_CLOB_CLIENT = False
     ClobClient = None
     ApiCreds = None
+    AssetType = None
+    BalanceAllowanceParams = None
 
 logger = structlog.get_logger()
 
@@ -123,13 +125,16 @@ class PolymarketAdapter(VenueAdapter):
         logger.info("polymarket_disconnected")
 
     async def get_balance(self) -> Decimal:
-        """Fetch USDC balance from wallet."""
+        """Fetch USDC collateral balance from wallet."""
         if not self._clob_client:
             raise RuntimeError("Not authenticated - credentials required")
 
-        balance_data = self._clob_client.get_balance()
-        usdc_balance = balance_data.get("USDC", "0")
-        return Decimal(str(usdc_balance))
+        params = BalanceAllowanceParams(
+            asset_type=AssetType.COLLATERAL,
+            signature_type=0,  # EOA wallet
+        )
+        balance_data = self._clob_client.get_balance_allowance(params)
+        return Decimal(str(balance_data.get("balance", "0")))
 
     async def get_token_id(self, market_id: str, outcome: str) -> str:
         """Resolve token_id from market_id and outcome.
@@ -193,10 +198,15 @@ class PolymarketAdapter(VenueAdapter):
         if not self._client:
             raise RuntimeError("Not connected")
 
-        # Fetch active markets
+        # Fetch most liquid open markets (sorted by 24h volume)
         response = await self._client.get(
             f"{GAMMA_API}/markets",
-            params={"active": "true", "limit": 100},
+            params={
+                "closed": "false",
+                "limit": 200,
+                "order": "volume24hr",
+                "ascending": "false",
+            },
         )
         response.raise_for_status()
         result: list[dict[str, Any]] = response.json()

@@ -12,7 +12,7 @@ from typing import Any
 import asyncpg
 import structlog
 
-from pm_arb.adapters.oracles.coingecko import CoinGeckoOracle
+from pm_arb.adapters.oracles.crypto import BinanceOracle
 from pm_arb.adapters.venues.polymarket import PolymarketAdapter
 from pm_arb.agents.base import BaseAgent
 from pm_arb.agents.capital_allocator import CapitalAllocatorAgent
@@ -155,16 +155,14 @@ class PilotOrchestrator:
         # Create adapters
         polymarket_adapter = PolymarketAdapter()
         await polymarket_adapter.connect()
-        coingecko_oracle = CoinGeckoOracle()
+        binance_oracle = BinanceOracle()
 
-        # Configure oracle for batch fetching (avoids rate limits)
         symbols = ["BTC", "ETH"]
-        coingecko_oracle.set_symbols(symbols)
 
         # Define channels for scanner
-        # OracleAgent publishes to oracle.{source}.{SYMBOL} (e.g., oracle.coingecko.BTC)
+        # OracleAgent publishes to oracle.{source}.{SYMBOL} (e.g., oracle.binance.BTC)
         venue_channels = ["venue.polymarket.prices"]
-        oracle_channels = [f"oracle.coingecko.{sym}" for sym in symbols]
+        oracle_channels = [f"oracle.binance.{sym}" for sym in symbols]
 
         # Create scanner first so we can register mappings
         scanner = OpportunityScannerAgent(
@@ -204,9 +202,9 @@ class PilotOrchestrator:
             ),
             OracleAgent(
                 self._redis_url,
-                oracle=coingecko_oracle,
+                oracle=binance_oracle,
                 symbols=symbols,
-                poll_interval=15.0,  # CoinGecko free tier: ~10-30 req/min
+                poll_interval=5.0,  # Only used for reconnect timing in streaming mode
             ),
             # Detection layer
             scanner,
@@ -235,9 +233,7 @@ class PilotOrchestrator:
                     break  # Clean exit
                 except Exception as e:
                     failures += 1
-                    self._restart_counts[agent.name] = (
-                        self._restart_counts.get(agent.name, 0) + 1
-                    )
+                    self._restart_counts[agent.name] = self._restart_counts.get(agent.name, 0) + 1
                     logger.error(
                         "agent_crashed",
                         agent=agent.name,
@@ -297,9 +293,7 @@ class PilotOrchestrator:
                 agent.name: {
                     "running": agent.is_running,
                     "restarts": self._restart_counts.get(agent.name, 0),
-                    "last_heartbeat": self._last_heartbeats.get(
-                        agent.name, now
-                    ).isoformat(),
+                    "last_heartbeat": self._last_heartbeats.get(agent.name, now).isoformat(),
                 }
                 for agent in self._agents
             },
@@ -349,9 +343,7 @@ async def main() -> None:
     if sys.platform != "win32":
         loop = asyncio.get_event_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(
-                sig, lambda: asyncio.create_task(orchestrator.stop())
-            )
+            loop.add_signal_handler(sig, lambda: asyncio.create_task(orchestrator.stop()))
     else:
         # Windows fallback - just run and rely on KeyboardInterrupt
         pass

@@ -76,6 +76,21 @@ async def test_executor_ignores_rejected_trade() -> None:
 
     executor.publish = capture_publish  # type: ignore[method-assign]
 
+    # Cache the request first (matches real message flow)
+    await executor.handle_message(
+        "trade.requests",
+        {
+            "id": "req-001",
+            "opportunity_id": "opp-001",
+            "strategy": "test-strategy",
+            "market_id": "polymarket:btc-100k",
+            "side": "buy",
+            "outcome": "YES",
+            "amount": "50",
+            "max_price": "0.55",
+        },
+    )
+
     # Process rejected decision
     await executor.handle_message(
         "trade.decisions",

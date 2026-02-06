@@ -38,6 +38,11 @@ class OracleAdapter(ABC):
         """Get current value for a symbol."""
         ...
 
+    @property
+    def supports_streaming(self) -> bool:
+        """Whether this oracle supports real-time WebSocket streaming."""
+        return False
+
     async def stream(self) -> AsyncIterator[OracleData]:
         """Stream real-time data. Override for websocket sources."""
         raise NotImplementedError(f"{self.name} does not support streaming")
