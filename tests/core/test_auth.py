@@ -56,7 +56,17 @@ def test_credentials_masks_secrets() -> None:
 
 def test_credentials_missing_env_vars() -> None:
     """Should raise error when credentials are missing."""
-    with patch.dict(os.environ, {}, clear=True):
+    mock_settings = type("MockSettings", (), {
+        "polymarket_api_key": "",
+        "polymarket_secret": "",
+        "polymarket_passphrase": "",
+        "polymarket_private_key": "",
+    })()
+
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch("pm_arb.core.config.settings", mock_settings),
+    ):
         with pytest.raises(ValueError, match="Missing required credentials"):
             load_credentials("polymarket")
 
