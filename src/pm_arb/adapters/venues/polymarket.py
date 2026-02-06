@@ -198,10 +198,15 @@ class PolymarketAdapter(VenueAdapter):
         if not self._client:
             raise RuntimeError("Not connected")
 
-        # Fetch active markets
+        # Fetch most liquid open markets (sorted by 24h volume)
         response = await self._client.get(
             f"{GAMMA_API}/markets",
-            params={"active": "true", "limit": 100},
+            params={
+                "closed": "false",
+                "limit": 200,
+                "order": "volume24hr",
+                "ascending": "false",
+            },
         )
         response.raise_for_status()
         result: list[dict[str, Any]] = response.json()

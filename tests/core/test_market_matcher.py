@@ -232,6 +232,125 @@ class TestParseWithRegex:
         result = matcher._parse_with_regex(market)
         assert result is None
 
+    def test_parses_dip_to_as_below(self) -> None:
+        """Should parse 'dip to' as direction='below'."""
+        matcher = MarketMatcher(scanner=None)  # type: ignore[arg-type]
+        market = Market(
+            id="polymarket:600",
+            venue="polymarket",
+            external_id="600",
+            title="Will Bitcoin dip to $55,000?",
+            yes_price=Decimal("0.5"),
+            no_price=Decimal("0.5"),
+        )
+        result = matcher._parse_with_regex(market)
+        assert result is not None
+        assert result.asset == "BTC"
+        assert result.threshold == Decimal("55000")
+        assert result.direction == "below"
+
+    def test_parses_sol_dip(self) -> None:
+        """Should parse 'Will Solana dip to $90?'."""
+        matcher = MarketMatcher(scanner=None)  # type: ignore[arg-type]
+        market = Market(
+            id="polymarket:601",
+            venue="polymarket",
+            external_id="601",
+            title="Will Solana dip to $90?",
+            yes_price=Decimal("0.5"),
+            no_price=Decimal("0.5"),
+        )
+        result = matcher._parse_with_regex(market)
+        assert result is not None
+        assert result.asset == "SOL"
+        assert result.threshold == Decimal("90")
+        assert result.direction == "below"
+
+    def test_parses_hit_as_above(self) -> None:
+        """Should parse 'hit' as direction='above'."""
+        matcher = MarketMatcher(scanner=None)  # type: ignore[arg-type]
+        market = Market(
+            id="polymarket:602",
+            venue="polymarket",
+            external_id="602",
+            title="Will Bitcoin hit $150,000 by end of year?",
+            yes_price=Decimal("0.5"),
+            no_price=Decimal("0.5"),
+        )
+        result = matcher._parse_with_regex(market)
+        assert result is not None
+        assert result.asset == "BTC"
+        assert result.threshold == Decimal("150000")
+        assert result.direction == "above"
+
+    def test_parses_dollar_m_abbreviation(self) -> None:
+        """Should parse '$1m' as 1000000."""
+        matcher = MarketMatcher(scanner=None)  # type: ignore[arg-type]
+        market = Market(
+            id="polymarket:603",
+            venue="polymarket",
+            external_id="603",
+            title="Will bitcoin hit $1m?",
+            yes_price=Decimal("0.5"),
+            no_price=Decimal("0.5"),
+        )
+        result = matcher._parse_with_regex(market)
+        assert result is not None
+        assert result.asset == "BTC"
+        assert result.threshold == Decimal("1000000")
+        assert result.direction == "above"
+
+    def test_parses_dollar_k_abbreviation(self) -> None:
+        """Should parse '$55k' as 55000."""
+        matcher = MarketMatcher(scanner=None)  # type: ignore[arg-type]
+        market = Market(
+            id="polymarket:604",
+            venue="polymarket",
+            external_id="604",
+            title="Will ETH hit $5k this month?",
+            yes_price=Decimal("0.5"),
+            no_price=Decimal("0.5"),
+        )
+        result = matcher._parse_with_regex(market)
+        assert result is not None
+        assert result.asset == "ETH"
+        assert result.threshold == Decimal("5000")
+        assert result.direction == "above"
+
+    def test_parses_drop_as_below(self) -> None:
+        """Should parse 'drop' as direction='below'."""
+        matcher = MarketMatcher(scanner=None)  # type: ignore[arg-type]
+        market = Market(
+            id="polymarket:605",
+            venue="polymarket",
+            external_id="605",
+            title="Will ETH drop below $2,000?",
+            yes_price=Decimal("0.5"),
+            no_price=Decimal("0.5"),
+        )
+        result = matcher._parse_with_regex(market)
+        assert result is not None
+        assert result.asset == "ETH"
+        assert result.threshold == Decimal("2000")
+        assert result.direction == "below"
+
+    def test_parses_exceed_as_above(self) -> None:
+        """Should parse 'exceed' as direction='above'."""
+        matcher = MarketMatcher(scanner=None)  # type: ignore[arg-type]
+        market = Market(
+            id="polymarket:606",
+            venue="polymarket",
+            external_id="606",
+            title="Will Solana exceed $300?",
+            yes_price=Decimal("0.5"),
+            no_price=Decimal("0.5"),
+        )
+        result = matcher._parse_with_regex(market)
+        assert result is not None
+        assert result.asset == "SOL"
+        assert result.threshold == Decimal("300")
+        assert result.direction == "above"
+
     def test_returns_none_for_crypto_without_threshold(self) -> None:
         """Should return None if crypto mentioned but no threshold pattern."""
         matcher = MarketMatcher(scanner=None)  # type: ignore[arg-type]

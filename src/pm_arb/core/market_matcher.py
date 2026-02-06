@@ -23,9 +23,9 @@ if TYPE_CHECKING:
 CRYPTO_PATTERN = re.compile(
     r"(BTC|Bitcoin|ETH|Ethereum|SOL|Solana)"  # Asset
     r".*?"  # Filler
-    r"(above|below|reach|over|under)"  # Direction
+    r"(above|below|reach|over|under|dip|hit|drop|fall|exceed|surpass)"  # Direction
     r".*?"  # Filler
-    r"\$([0-9,]+)",  # Threshold
+    r"\$([0-9,.]+[km]?)",  # Threshold (supports $55k, $1m abbreviations)
     re.IGNORECASE,
 )
 
@@ -34,8 +34,14 @@ DIRECTION_MAP: dict[str, str] = {
     "above": "above",
     "over": "above",
     "reach": "above",
+    "hit": "above",
+    "exceed": "above",
+    "surpass": "above",
     "below": "below",
     "under": "below",
+    "dip": "below",
+    "drop": "below",
+    "fall": "below",
 }
 
 
@@ -100,7 +106,13 @@ class MarketMatcher:
         direction = DIRECTION_MAP.get(direction_raw, "above")
 
         threshold_raw = match.group(3).replace(",", "")
-        threshold = Decimal(threshold_raw)
+        # Handle k/m abbreviations: $55k → 55000, $1m → 1000000
+        if threshold_raw.lower().endswith("k"):
+            threshold = Decimal(threshold_raw[:-1]) * 1000
+        elif threshold_raw.lower().endswith("m"):
+            threshold = Decimal(threshold_raw[:-1]) * 1_000_000
+        else:
+            threshold = Decimal(threshold_raw)
 
         return ParsedMarket(
             market_id=market.id,
