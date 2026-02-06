@@ -86,3 +86,33 @@ async def test_oracle_sniper_sizes_by_signal() -> None:
     # Signal scaling: 200 * 0.90 = 180
     assert trade_params is not None
     assert trade_params["amount"] == Decimal("180")
+
+
+@pytest.mark.asyncio
+async def test_oracle_sniper_buys_no_on_negative_edge() -> None:
+    """Negative edge means YES is overpriced — strategy should buy NO."""
+    strategy = OracleSniperStrategy(redis_url="redis://localhost:6379")
+
+    opportunity = {
+        "id": "opp-003",
+        "type": OpportunityType.ORACLE_LAG.value,
+        "markets": ["polymarket:btc-70k"],
+        "oracle_source": "binance",
+        "oracle_value": "64500",
+        "expected_edge": "-0.085",
+        "signal_strength": "1.0",
+        "metadata": {
+            "threshold": "70000",
+            "direction": "above",
+            "fair_yes_price": "0.05",
+            "current_yes_price": "0.135",
+        },
+    }
+
+    trade_params = strategy.evaluate_opportunity(opportunity)
+
+    assert trade_params is not None
+    assert trade_params["outcome"] == "NO"
+    assert trade_params["side"] == "buy"
+    # NO price = 1 - 0.135 = 0.865
+    assert trade_params["max_price"] == Decimal("0.865")

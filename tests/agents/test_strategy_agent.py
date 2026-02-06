@@ -67,3 +67,32 @@ async def test_strategy_generates_trade_request() -> None:
     assert published[0][0] == "trade.requests"
     assert published[0][1]["strategy"] == "test-strategy"
     assert published[0][1]["opportunity_id"] == "opp-001"
+
+
+@pytest.mark.asyncio
+async def test_strategy_accepts_negative_edge() -> None:
+    """Strategy should accept opportunities with negative edge (buy NO direction)."""
+    strategy = TestStrategy(redis_url="redis://localhost:6379")
+
+    published: list[tuple[str, dict[str, Any]]] = []
+
+    async def capture_publish(channel: str, data: dict[str, Any]) -> str:
+        published.append((channel, data))
+        return "mock-id"
+
+    strategy.publish = capture_publish  # type: ignore[method-assign]
+
+    await strategy.handle_message(
+        "opportunities.detected",
+        {
+            "id": "opp-002",
+            "type": OpportunityType.ORACLE_LAG.value,
+            "markets": ["polymarket:btc-100k"],
+            "expected_edge": "-0.10",  # Negative = YES overpriced, buy NO
+            "signal_strength": "0.80",
+            "metadata": {},
+        },
+    )
+
+    assert len(published) == 1
+    assert published[0][0] == "trade.requests"
