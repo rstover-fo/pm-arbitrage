@@ -55,7 +55,7 @@ class StrategyAgent(BaseAgent):
         edge = Decimal(str(data.get("expected_edge", "0")))
         signal = Decimal(str(data.get("signal_strength", "0")))
 
-        if edge < self._min_edge or signal < self._min_signal:
+        if abs(edge) < self._min_edge or signal < self._min_signal:
             return
 
         # Let subclass evaluate
