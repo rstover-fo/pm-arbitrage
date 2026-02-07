@@ -73,6 +73,55 @@ async def test_consumer_group(redis_client: redis.Redis) -> None:
 
 
 @pytest.mark.asyncio
+async def test_boolean_values_roundtrip(redis_client: redis.Redis) -> None:
+    """Booleans must round-trip correctly through publish/consume.
+
+    Previously str(False) produced "False" which deserialized as a truthy
+    string, causing risk rejections (approved=False) to be treated as
+    approvals by downstream consumers.
+    """
+    bus = MessageBus(redis_client)
+    channel = "test.bool.channel"
+
+    await bus.publish(channel, {"approved": False, "flag": True})
+
+    messages = await bus.consume(channel, count=1)
+    assert len(messages) == 1
+    assert messages[0]["approved"] is False
+    assert messages[0]["flag"] is True
+
+
+@pytest.mark.asyncio
+async def test_none_value_roundtrips(redis_client: redis.Redis) -> None:
+    """None values should round-trip correctly."""
+    bus = MessageBus(redis_client)
+    channel = "test.none.channel"
+
+    await bus.publish(channel, {"value": None, "name": "test"})
+
+    messages = await bus.consume(channel, count=1)
+    assert len(messages) == 1
+    assert messages[0]["value"] is None
+    assert messages[0]["name"] == "test"
+
+
+@pytest.mark.asyncio
+async def test_decimal_values_serialize(redis_client: redis.Redis) -> None:
+    """Decimal values should serialize without crashing."""
+    from decimal import Decimal
+
+    bus = MessageBus(redis_client)
+    channel = "test.decimal.channel"
+
+    await bus.publish(channel, {"price": Decimal("0.55"), "amount": Decimal("100")})
+
+    messages = await bus.consume(channel, count=1)
+    assert len(messages) == 1
+    assert messages[0]["price"] == "0.55"
+    assert messages[0]["amount"] == "100"
+
+
+@pytest.mark.asyncio
 async def test_publish_command(redis_client: redis.Redis) -> None:
     """Should publish system commands that all agents receive."""
     bus = MessageBus(redis_client)

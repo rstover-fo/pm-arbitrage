@@ -1,9 +1,20 @@
 """Redis Streams message bus for agent communication."""
 
 import json
+from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 import redis.asyncio as redis
+
+
+def _json_default(obj: Any) -> Any:
+    """Handle non-standard types for JSON serialization."""
+    if isinstance(obj, Decimal):
+        return str(obj)
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
 class MessageBus:
@@ -26,9 +37,10 @@ class MessageBus:
 
     async def publish(self, channel: str, data: dict[str, Any]) -> str:
         """Publish message to a stream. Returns message ID."""
-        # Serialize nested objects as JSON strings
+        # Serialize all values as JSON strings so booleans/numbers round-trip correctly.
+        # Previously, str(False) produced "False" which deserialized as truthy string.
         flat_data: dict[str, str] = {
-            k: json.dumps(v) if isinstance(v, (dict, list)) else str(v) for k, v in data.items()
+            k: json.dumps(v, default=_json_default) for k, v in data.items()
         }
         message_id: str = await self._client.xadd(channel, flat_data)  # type: ignore[arg-type]
         return message_id

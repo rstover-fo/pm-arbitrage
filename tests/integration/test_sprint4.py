@@ -53,6 +53,7 @@ async def test_opportunity_to_paper_trade_flow() -> None:
         "outcome": "YES",
         "amount": "50",
         "max_price": "0.55",
+        "expected_edge": "0.10",  # 10% edge so risk guardian approves
     }
 
     # Store request in executor and send to guardian
