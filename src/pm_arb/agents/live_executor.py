@@ -7,11 +7,10 @@ from typing import Any
 import asyncpg
 import structlog
 
-from pm_arb.adapters.venues.polymarket import PolymarketAdapter
+from pm_arb.adapters.venues.base import VenueAdapter
 from pm_arb.agents.base import BaseAgent
 from pm_arb.core.alerts import AlertService
-from pm_arb.core.auth import PolymarketCredentials
-from pm_arb.core.models import Order, OrderStatus, OrderType, Side, Trade, TradeStatus
+from pm_arb.core.models import Side, Trade, TradeRequest, TradeStatus
 from pm_arb.db.repository import PaperTradeRepository
 
 logger = structlog.get_logger()
@@ -23,13 +22,12 @@ class LiveExecutorAgent(BaseAgent):
     def __init__(
         self,
         redis_url: str,
-        credentials: dict[str, PolymarketCredentials],
+        adapters: dict[str, VenueAdapter],
         db_pool: asyncpg.Pool | None = None,
     ) -> None:
         self.name = "live-executor"
         super().__init__(redis_url)
-        self._credentials = credentials
-        self._adapters: dict[str, PolymarketAdapter] = {}
+        self._adapters: dict[str, VenueAdapter] = adapters
         self._pending_requests: dict[str, dict[str, Any]] = {}
         self._pending_decisions: dict[str, dict[str, Any]] = {}  # Buffered early decisions
         self._db_pool = db_pool
@@ -77,12 +75,14 @@ class LiveExecutorAgent(BaseAgent):
                 else:
                     await self._handle_rejection(data)
 
-    def _get_adapter(self, venue: str) -> PolymarketAdapter:
-        """Get or create adapter for venue."""
+    def _get_adapter(self, venue: str) -> VenueAdapter:
+        """Get adapter for venue.
+
+        Raises:
+            ValueError: If no adapter configured for the venue.
+        """
         if venue not in self._adapters:
-            if venue not in self._credentials:
-                raise ValueError(f"No credentials for venue: {venue}")
-            self._adapters[venue] = PolymarketAdapter(credentials=self._credentials[venue])
+            raise ValueError(f"No adapter configured for venue: {venue}")
         return self._adapters[venue]
 
     async def _handle_rejection(self, data: dict[str, Any]) -> None:
@@ -130,7 +130,7 @@ class LiveExecutorAgent(BaseAgent):
             del self._pending_requests[request_id]
 
     async def _execute_trade(self, data: dict[str, Any]) -> None:
-        """Execute a single trade.
+        """Execute a single trade via the generic VenueAdapter interface.
 
         Args:
             data: Risk decision data with request_id to look up original request.
@@ -142,7 +142,7 @@ class LiveExecutorAgent(BaseAgent):
         market_id = request.get("market_id", "")
 
         # Extract venue from market_id (format: "venue:external_id")
-        venue = market_id.split(":")[0] if ":" in market_id else "polymarket"
+        venue = market_id.split(":")[0] if ":" in market_id else "unknown"
 
         logger.info(
             "executing_trade",
@@ -157,10 +157,21 @@ class LiveExecutorAgent(BaseAgent):
             if not adapter.is_connected:
                 await adapter.connect()
 
+            # Build TradeRequest from the pending request data
+            trade_request = TradeRequest(
+                id=request_id,
+                opportunity_id=request.get("opportunity_id", "unknown"),
+                strategy=request.get("strategy", "unknown"),
+                market_id=market_id,
+                side=Side(request.get("side", "buy")),
+                outcome=request.get("outcome", "YES"),
+                amount=Decimal(str(request.get("amount", "0"))),
+                max_price=Decimal(str(request.get("max_price", "1"))),
+                expected_edge=Decimal(str(request.get("expected_edge", "0"))),
+            )
+
             # Pre-check: Verify sufficient balance before placing order
-            amount = Decimal(str(request.get("amount", "0")))
-            max_price = Decimal(str(request.get("max_price", "1")))
-            required_balance = amount * max_price  # Worst-case cost
+            required_balance = trade_request.amount * trade_request.max_price
 
             try:
                 balance = await adapter.get_balance()
@@ -178,36 +189,16 @@ class LiveExecutorAgent(BaseAgent):
                         request_id, error_msg, market_id=market_id, request=request
                     )
                     return
-            except RuntimeError as e:
-                # Not authenticated - can't check balance
+            except (RuntimeError, NotImplementedError) as e:
+                # Not authenticated or adapter doesn't support balance check
                 logger.warning("balance_check_skipped", reason=str(e))
 
-            # Place the order - use request data for trade details
-            side = Side.BUY if request.get("side", "").lower() == "buy" else Side.SELL
-
-            # Resolve token_id if not provided in request
-            token_id = request.get("token_id", "")
-            if not token_id:
-                outcome = request.get("outcome", "YES")
-                token_id = await adapter.get_token_id(market_id, outcome)
-                logger.info(
-                    "token_id_resolved",
-                    market_id=market_id,
-                    outcome=outcome,
-                    token_id=token_id,
-                )
-
-            order = await adapter.place_order(
-                token_id=token_id,
-                side=side,
-                amount=amount,
-                order_type=OrderType.MARKET,  # Market orders for now
-            )
+            # Place order via generic VenueAdapter interface
+            trade = await adapter.place_order(trade_request)
 
             # Publish result
-            await self._publish_result(
-                request_id=request_id,
-                order=order,
+            await self._publish_trade_result(
+                trade=trade,
                 request=request,
             )
 
@@ -224,91 +215,64 @@ class LiveExecutorAgent(BaseAgent):
             if request_id in self._pending_requests:
                 del self._pending_requests[request_id]
 
-    async def _publish_result(
+    async def _publish_trade_result(
         self,
-        request_id: str,
-        order: Order,
+        trade: Trade,
         request: dict[str, Any] | None = None,
     ) -> None:
         """Publish trade execution result, persist to DB, and send alert."""
-        status_map = {
-            OrderStatus.FILLED: "filled",
-            OrderStatus.PARTIALLY_FILLED: "partial",
-            OrderStatus.OPEN: "open",
-            OrderStatus.REJECTED: "rejected",
-            OrderStatus.CANCELLED: "cancelled",
-        }
-
-        market_id = request.get("market_id", "unknown") if request else "unknown"
-        venue = market_id.split(":")[0] if ":" in market_id else "polymarket"
-
         # Persist successful trade to database
         persisted = False
-        filled_statuses = (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED)
-        if self._repo and request and order.status in filled_statuses:
-            fill_price = order.average_price or Decimal("0")
+        filled_statuses = (TradeStatus.FILLED, TradeStatus.PARTIAL)
+        if self._repo and request and trade.status in filled_statuses:
             db_id = await self._repo.insert_trade(
                 opportunity_id=request.get("opportunity_id", "unknown"),
                 opportunity_type=request.get("opportunity_type", "unknown"),
-                market_id=market_id,
-                venue=venue,
-                side=order.side.value,
-                outcome=request.get("outcome", "YES"),
-                quantity=order.filled_amount,
-                price=fill_price,
-                fees=Decimal("0"),  # Polymarket fees handled in price
+                market_id=trade.market_id,
+                venue=trade.venue,
+                side=trade.side.value,
+                outcome=trade.outcome,
+                quantity=trade.amount,
+                price=trade.price,
+                fees=trade.fees,
                 expected_edge=Decimal(str(request.get("expected_edge", "0"))),
                 strategy_id=request.get("strategy"),
                 risk_approved=True,
             )
             persisted = db_id is not None
 
-            # Track trade in memory
-            trade = Trade(
-                id=f"live-{order.external_id}",
-                request_id=request_id,
-                market_id=market_id,
-                venue=venue,
-                side=order.side,
-                outcome=request.get("outcome", "YES"),
-                amount=order.filled_amount,
-                price=fill_price,
-                fees=Decimal("0"),
-                status=TradeStatus.FILLED,
-                external_id=order.external_id,
-            )
-            self._trades.append(trade)
+        # Track trade in memory
+        self._trades.append(trade)
 
         result = {
-            "request_id": request_id,
-            "order_id": order.external_id,
-            "status": status_map.get(order.status, "unknown"),
-            "filled_amount": str(order.filled_amount),
-            "average_price": str(order.average_price) if order.average_price else None,
-            "error": order.error_message,
+            "request_id": trade.request_id,
+            "order_id": trade.external_id or "",
+            "status": trade.status.value,
+            "filled_amount": str(trade.amount),
+            "average_price": str(trade.price),
             "paper_trade": False,
         }
 
         await self.publish("trade.results", result)
 
         # Send alerts for trade execution
-        if order.status in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED):
+        if trade.status in filled_statuses:
             await self._alerts.trade_executed(
-                market=market_id,
-                side=order.side.value,
-                amount=str(order.filled_amount),
-                price=str(order.average_price) if order.average_price else "market",
+                market=trade.market_id,
+                side=trade.side.value,
+                amount=str(trade.amount),
+                price=str(trade.price),
             )
-        elif order.status == OrderStatus.REJECTED:
+        elif trade.status == TradeStatus.FAILED:
             await self._alerts.trade_failed(
-                market=market_id,
-                error=order.error_message or "Order rejected",
+                market=trade.market_id,
+                error="Trade execution failed",
             )
 
         logger.info(
             "trade_result_published",
-            request_id=request_id,
-            status=result["status"],
+            request_id=trade.request_id,
+            status=trade.status.value,
             persisted=persisted,
         )
 

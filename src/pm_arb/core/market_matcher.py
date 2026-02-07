@@ -29,6 +29,27 @@ CRYPTO_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Regex pattern for Kalshi structured tickers
+# Examples: BTCUSD-26FEB04-T104000, FEDRATE-26FEB04-T450, TEMP-NYC-26FEB04-T40
+KALSHI_TICKER_PATTERN = re.compile(
+    r"^(?P<asset>[A-Z]+(?:-[A-Z]+)?)"  # Asset (BTCUSD, TEMP-NYC)
+    r"-\d{2}[A-Z]{3}\d{2}"  # Date (26FEB04)
+    r"-T(?P<threshold>\d+(?:P\d+)?)"  # Threshold (T104000, T4P0)
+    r"$"
+)
+
+# Kalshi asset prefix -> oracle symbol mapping
+KALSHI_ASSET_TO_ORACLE: dict[str, str] = {
+    "BTCUSD": "BTC",
+    "ETHUSD": "ETH",
+    "SOLUSD": "SOL",
+    "FEDRATE": "FED_RATE",
+    "UNEMPLOYMENT": "UNEMPLOYMENT",
+    "CPI": "CPI",
+    "GDP": "GDP",
+    "INITIALCLAIMS": "INITIAL_CLAIMS",
+}
+
 # Direction normalization
 DIRECTION_MAP: dict[str, str] = {
     "above": "above",
@@ -92,6 +113,91 @@ class MarketMatcher:
         """Check if title mentions a supported crypto asset."""
         title_lower = title.lower()
         return any(alias in title_lower for alias in self.ASSET_ALIASES)
+
+    def _is_kalshi_market(self, market: Market) -> bool:
+        """Check if market is a Kalshi-format market with structured ticker."""
+        return market.venue == "kalshi" or market.id.startswith("kalshi:")
+
+    def _extract_kalshi_ticker(self, market: Market) -> str | None:
+        """Extract the raw ticker string from a Kalshi market.
+
+        Tries external_id first, then falls back to parsing the market id
+        (format: 'kalshi:{ticker}').
+        """
+        if market.external_id:
+            return market.external_id
+        if market.id.startswith("kalshi:"):
+            return market.id.removeprefix("kalshi:")
+        return None
+
+    def _parse_kalshi_threshold(self, raw: str, asset: str) -> Decimal:
+        """Parse Kalshi threshold value from the T-prefix portion.
+
+        Rules:
+        - Crypto (BTCUSD, ETHUSD, SOLUSD): raw integer dollars (T104000 -> $104,000)
+        - FRED indicators: 'P' is the decimal point (T4P0 -> 4.0, T450 -> 4.50)
+        - Temperature (TEMP-*): integer Fahrenheit (T40 -> 40)
+        """
+        # Crypto assets: threshold is a straight integer in dollars
+        if asset in ("BTCUSD", "ETHUSD", "SOLUSD"):
+            return Decimal(raw.replace("P", "."))
+
+        # Temperature: straight integer Fahrenheit
+        if asset.startswith("TEMP-"):
+            return Decimal(raw.replace("P", "."))
+
+        # FRED indicators: 'P' serves as decimal point
+        if "P" in raw:
+            return Decimal(raw.replace("P", "."))
+
+        # FRED without P: e.g. T450 -> 4.50 (implied 2-decimal)
+        # Convention: last two digits are fractional (basis-point style)
+        raw_int = int(raw)
+        return Decimal(raw_int) / Decimal(100)
+
+    def _parse_kalshi_ticker(self, market: Market) -> ParsedMarket | None:
+        """Parse a Kalshi structured ticker into a ParsedMarket.
+
+        Ticker format: ASSET-DDMMMYY-Tthreshold
+        Examples:
+            BTCUSD-26FEB04-T104000  -> BTC, $104,000, above
+            FEDRATE-26FEB04-T450    -> FED_RATE, 4.50, above
+            TEMP-NYC-26FEB04-T40    -> TEMP_NYC, 40, above
+        """
+        ticker = self._extract_kalshi_ticker(market)
+        if not ticker:
+            return None
+
+        match = KALSHI_TICKER_PATTERN.match(ticker)
+        if not match:
+            return None
+
+        asset_raw = match.group("asset")
+        threshold_raw = match.group("threshold")
+
+        # Resolve oracle symbol: check direct mapping first, then TEMP-* pattern
+        oracle_symbol = KALSHI_ASSET_TO_ORACLE.get(asset_raw)
+        if oracle_symbol is None and asset_raw.startswith("TEMP-"):
+            city = asset_raw.removeprefix("TEMP-")
+            oracle_symbol = f"TEMP_{city}"
+        if oracle_symbol is None:
+            logger.debug(
+                "kalshi_ticker_unknown_asset",
+                ticker=ticker,
+                asset=asset_raw,
+            )
+            return None
+
+        threshold = self._parse_kalshi_threshold(threshold_raw, asset_raw)
+
+        return ParsedMarket(
+            market_id=market.id,
+            asset=oracle_symbol,
+            threshold=threshold,
+            direction="above",  # Kalshi markets are all "above" direction
+            expiry=None,
+            parse_method="kalshi_ticker",
+        )
 
     def _parse_with_regex(self, market: Market) -> ParsedMarket | None:
         """Fast regex extraction. Returns None if no match."""
@@ -184,17 +290,27 @@ Return ONLY the JSON array, no other text."""
     async def match_markets(self, markets: list[Market]) -> MatchResult:
         """Parse all markets and register mappings with scanner.
 
-        1. Try regex on each market
-        2. Batch unparsed crypto titles to LLM
-        3. Register all successful parses with scanner
+        1. Try Kalshi ticker parsing for kalshi: markets
+        2. Try regex on remaining markets
+        3. Batch unparsed crypto titles to LLM
+        4. Register all successful parses with scanner
         """
         matched_markets: list[ParsedMarket] = []
         skipped = 0
         failed = 0
         needs_llm: list[Market] = []
 
-        # First pass: regex
         for market in markets:
+            # First: try Kalshi ticker parsing for kalshi markets
+            if self._is_kalshi_market(market):
+                parsed = self._parse_kalshi_ticker(market)
+                if parsed:
+                    matched_markets.append(parsed)
+                else:
+                    skipped += 1
+                continue
+
+            # Then: existing crypto regex + LLM flow for other venues
             if not self._is_crypto_market(market.title):
                 skipped += 1
                 continue

@@ -5,7 +5,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from pm_arb.core.market_matcher import MarketMatcher, MatchResult, ParsedMarket
+from pm_arb.core.market_matcher import (
+    KALSHI_ASSET_TO_ORACLE,
+    KALSHI_TICKER_PATTERN,
+    MarketMatcher,
+    MatchResult,
+    ParsedMarket,
+)
 from pm_arb.core.models import Market
 
 
@@ -605,3 +611,374 @@ class TestMatchMarkets:
         llm_markets = mock_llm.call_args[0][0]
         assert len(llm_markets) == 1
         assert llm_markets[0].id == "polymarket:222"
+
+    @pytest.mark.asyncio
+    async def test_routes_kalshi_markets_to_ticker_parser(self) -> None:
+        """Should route kalshi markets to _parse_kalshi_ticker, not regex/LLM."""
+        mock_scanner = MagicMock()
+        matcher = MarketMatcher(scanner=mock_scanner, anthropic_api_key="test-key")
+
+        markets = [
+            Market(
+                id="kalshi:BTCUSD-26FEB04-T104000",
+                venue="kalshi",
+                external_id="BTCUSD-26FEB04-T104000",
+                title="Will BTC be above $104,000?",
+                yes_price=Decimal("0.65"),
+                no_price=Decimal("0.35"),
+            ),
+            Market(
+                id="polymarket:123",
+                venue="polymarket",
+                external_id="123",
+                title="Will BTC be above $100,000?",
+                yes_price=Decimal("0.5"),
+                no_price=Decimal("0.5"),
+            ),
+        ]
+
+        with patch.object(matcher, "_parse_with_llm", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = []
+            result = await matcher.match_markets(markets)
+
+        assert result.total_markets == 2
+        assert result.matched == 2
+        assert result.skipped == 0
+        # Kalshi market should be parsed with kalshi_ticker method
+        kalshi_parsed = result.matched_markets[0]
+        assert kalshi_parsed.parse_method == "kalshi_ticker"
+        assert kalshi_parsed.asset == "BTC"
+        assert kalshi_parsed.threshold == Decimal("104000")
+        assert kalshi_parsed.direction == "above"
+        # Polymarket market should use regex
+        poly_parsed = result.matched_markets[1]
+        assert poly_parsed.parse_method == "regex"
+        # LLM should NOT be called (both markets parsed successfully)
+        mock_llm.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_registers_kalshi_mappings_with_scanner(self) -> None:
+        """Should register Kalshi market oracle mappings with scanner."""
+        mock_scanner = MagicMock()
+        matcher = MarketMatcher(scanner=mock_scanner, anthropic_api_key=None)
+
+        markets = [
+            Market(
+                id="kalshi:FEDRATE-26FEB04-T450",
+                venue="kalshi",
+                external_id="FEDRATE-26FEB04-T450",
+                title="Fed funds rate above 4.50%?",
+                yes_price=Decimal("0.3"),
+                no_price=Decimal("0.7"),
+            ),
+        ]
+
+        await matcher.match_markets(markets)
+
+        mock_scanner.register_market_oracle_mapping.assert_called_once_with(
+            market_id="kalshi:FEDRATE-26FEB04-T450",
+            oracle_symbol="FED_RATE",
+            threshold=Decimal("4.50"),
+            direction="above",
+        )
+
+    @pytest.mark.asyncio
+    async def test_skips_unparseable_kalshi_market(self) -> None:
+        """Should skip kalshi market with unrecognized ticker format."""
+        mock_scanner = MagicMock()
+        matcher = MarketMatcher(scanner=mock_scanner, anthropic_api_key=None)
+
+        markets = [
+            Market(
+                id="kalshi:WEIRDFORMAT",
+                venue="kalshi",
+                external_id="WEIRDFORMAT",
+                title="Some weird Kalshi market",
+                yes_price=Decimal("0.5"),
+                no_price=Decimal("0.5"),
+            ),
+        ]
+
+        result = await matcher.match_markets(markets)
+
+        assert result.total_markets == 1
+        assert result.matched == 0
+        assert result.skipped == 1
+        mock_scanner.register_market_oracle_mapping.assert_not_called()
+
+
+class TestKalshiTickerPattern:
+    """Tests for the KALSHI_TICKER_PATTERN regex."""
+
+    def test_matches_btcusd_ticker(self) -> None:
+        """Should match BTCUSD-26FEB04-T104000."""
+        match = KALSHI_TICKER_PATTERN.match("BTCUSD-26FEB04-T104000")
+        assert match is not None
+        assert match.group("asset") == "BTCUSD"
+        assert match.group("threshold") == "104000"
+
+    def test_matches_fedrate_ticker(self) -> None:
+        """Should match FEDRATE-26FEB04-T450."""
+        match = KALSHI_TICKER_PATTERN.match("FEDRATE-26FEB04-T450")
+        assert match is not None
+        assert match.group("asset") == "FEDRATE"
+        assert match.group("threshold") == "450"
+
+    def test_matches_temp_city_ticker(self) -> None:
+        """Should match TEMP-NYC-26FEB04-T40."""
+        match = KALSHI_TICKER_PATTERN.match("TEMP-NYC-26FEB04-T40")
+        assert match is not None
+        assert match.group("asset") == "TEMP-NYC"
+        assert match.group("threshold") == "40"
+
+    def test_matches_decimal_threshold_with_p(self) -> None:
+        """Should match threshold with P decimal: T4P0."""
+        match = KALSHI_TICKER_PATTERN.match("UNEMPLOYMENT-26FEB04-T4P0")
+        assert match is not None
+        assert match.group("threshold") == "4P0"
+
+    def test_rejects_malformed_ticker(self) -> None:
+        """Should not match ticker without date segment."""
+        match = KALSHI_TICKER_PATTERN.match("BTCUSD-T104000")
+        assert match is None
+
+    def test_rejects_lowercase_ticker(self) -> None:
+        """Should not match lowercase tickers."""
+        match = KALSHI_TICKER_PATTERN.match("btcusd-26FEB04-T104000")
+        assert match is None
+
+
+class TestIsKalshiMarket:
+    """Tests for _is_kalshi_market helper."""
+
+    def test_kalshi_venue(self) -> None:
+        """Should identify market with venue='kalshi'."""
+        matcher = MarketMatcher(scanner=None)  # type: ignore[arg-type]
+        market = Market(
+            id="some-id",
+            venue="kalshi",
+            external_id="BTCUSD-26FEB04-T104000",
+            title="BTC above $104,000?",
+            yes_price=Decimal("0.5"),
+            no_price=Decimal("0.5"),
+        )
+        assert matcher._is_kalshi_market(market) is True
+
+    def test_kalshi_prefix_in_id(self) -> None:
+        """Should identify market with id starting with 'kalshi:'."""
+        matcher = MarketMatcher(scanner=None)  # type: ignore[arg-type]
+        market = Market(
+            id="kalshi:BTCUSD-26FEB04-T104000",
+            venue="other",
+            external_id="BTCUSD-26FEB04-T104000",
+            title="BTC above $104,000?",
+            yes_price=Decimal("0.5"),
+            no_price=Decimal("0.5"),
+        )
+        assert matcher._is_kalshi_market(market) is True
+
+    def test_polymarket_is_not_kalshi(self) -> None:
+        """Should reject polymarket market."""
+        matcher = MarketMatcher(scanner=None)  # type: ignore[arg-type]
+        market = Market(
+            id="polymarket:123",
+            venue="polymarket",
+            external_id="123",
+            title="Will BTC be above $100,000?",
+            yes_price=Decimal("0.5"),
+            no_price=Decimal("0.5"),
+        )
+        assert matcher._is_kalshi_market(market) is False
+
+
+class TestParseKalshiTicker:
+    """Tests for _parse_kalshi_ticker."""
+
+    def test_parses_btcusd_ticker(self) -> None:
+        """Should parse BTCUSD-26FEB04-T104000 -> BTC, $104,000, above."""
+        matcher = MarketMatcher(scanner=None)  # type: ignore[arg-type]
+        market = Market(
+            id="kalshi:BTCUSD-26FEB04-T104000",
+            venue="kalshi",
+            external_id="BTCUSD-26FEB04-T104000",
+            title="Will BTC be above $104,000?",
+            yes_price=Decimal("0.65"),
+            no_price=Decimal("0.35"),
+        )
+        result = matcher._parse_kalshi_ticker(market)
+        assert result is not None
+        assert result.market_id == "kalshi:BTCUSD-26FEB04-T104000"
+        assert result.asset == "BTC"
+        assert result.threshold == Decimal("104000")
+        assert result.direction == "above"
+        assert result.parse_method == "kalshi_ticker"
+
+    def test_parses_ethusd_ticker(self) -> None:
+        """Should parse ETHUSD ticker to ETH oracle symbol."""
+        matcher = MarketMatcher(scanner=None)  # type: ignore[arg-type]
+        market = Market(
+            id="kalshi:ETHUSD-26FEB04-T4000",
+            venue="kalshi",
+            external_id="ETHUSD-26FEB04-T4000",
+            title="Will ETH be above $4,000?",
+            yes_price=Decimal("0.5"),
+            no_price=Decimal("0.5"),
+        )
+        result = matcher._parse_kalshi_ticker(market)
+        assert result is not None
+        assert result.asset == "ETH"
+        assert result.threshold == Decimal("4000")
+
+    def test_parses_fedrate_ticker_with_implied_decimal(self) -> None:
+        """Should parse FEDRATE-26FEB04-T450 -> FED_RATE, 4.50, above."""
+        matcher = MarketMatcher(scanner=None)  # type: ignore[arg-type]
+        market = Market(
+            id="kalshi:FEDRATE-26FEB04-T450",
+            venue="kalshi",
+            external_id="FEDRATE-26FEB04-T450",
+            title="Fed funds rate above 4.50%?",
+            yes_price=Decimal("0.3"),
+            no_price=Decimal("0.7"),
+        )
+        result = matcher._parse_kalshi_ticker(market)
+        assert result is not None
+        assert result.market_id == "kalshi:FEDRATE-26FEB04-T450"
+        assert result.asset == "FED_RATE"
+        assert result.threshold == Decimal("4.50")
+        assert result.direction == "above"
+        assert result.parse_method == "kalshi_ticker"
+
+    def test_parses_unemployment_ticker_with_p_decimal(self) -> None:
+        """Should parse UNEMPLOYMENT-26FEB04-T4P0 -> UNEMPLOYMENT, 4.0, above."""
+        matcher = MarketMatcher(scanner=None)  # type: ignore[arg-type]
+        market = Market(
+            id="kalshi:UNEMPLOYMENT-26FEB04-T4P0",
+            venue="kalshi",
+            external_id="UNEMPLOYMENT-26FEB04-T4P0",
+            title="Unemployment rate above 4.0%?",
+            yes_price=Decimal("0.4"),
+            no_price=Decimal("0.6"),
+        )
+        result = matcher._parse_kalshi_ticker(market)
+        assert result is not None
+        assert result.asset == "UNEMPLOYMENT"
+        assert result.threshold == Decimal("4.0")
+        assert result.direction == "above"
+
+    def test_parses_temp_nyc_ticker(self) -> None:
+        """Should parse TEMP-NYC-26FEB04-T40 -> TEMP_NYC, 40, above."""
+        matcher = MarketMatcher(scanner=None)  # type: ignore[arg-type]
+        market = Market(
+            id="kalshi:TEMP-NYC-26FEB04-T40",
+            venue="kalshi",
+            external_id="TEMP-NYC-26FEB04-T40",
+            title="Will NYC temperature be above 40F?",
+            yes_price=Decimal("0.55"),
+            no_price=Decimal("0.45"),
+        )
+        result = matcher._parse_kalshi_ticker(market)
+        assert result is not None
+        assert result.market_id == "kalshi:TEMP-NYC-26FEB04-T40"
+        assert result.asset == "TEMP_NYC"
+        assert result.threshold == Decimal("40")
+        assert result.direction == "above"
+        assert result.parse_method == "kalshi_ticker"
+
+    def test_parses_cpi_ticker(self) -> None:
+        """Should parse CPI ticker to CPI oracle symbol."""
+        matcher = MarketMatcher(scanner=None)  # type: ignore[arg-type]
+        market = Market(
+            id="kalshi:CPI-26FEB04-T3P5",
+            venue="kalshi",
+            external_id="CPI-26FEB04-T3P5",
+            title="CPI above 3.5%?",
+            yes_price=Decimal("0.2"),
+            no_price=Decimal("0.8"),
+        )
+        result = matcher._parse_kalshi_ticker(market)
+        assert result is not None
+        assert result.asset == "CPI"
+        assert result.threshold == Decimal("3.5")
+
+    def test_returns_none_for_unknown_asset(self) -> None:
+        """Should return None for unrecognized Kalshi asset prefix."""
+        matcher = MarketMatcher(scanner=None)  # type: ignore[arg-type]
+        market = Market(
+            id="kalshi:XYZABC-26FEB04-T100",
+            venue="kalshi",
+            external_id="XYZABC-26FEB04-T100",
+            title="Some unknown market",
+            yes_price=Decimal("0.5"),
+            no_price=Decimal("0.5"),
+        )
+        result = matcher._parse_kalshi_ticker(market)
+        assert result is None
+
+    def test_returns_none_for_malformed_ticker(self) -> None:
+        """Should return None when ticker doesn't match pattern."""
+        matcher = MarketMatcher(scanner=None)  # type: ignore[arg-type]
+        market = Market(
+            id="kalshi:not-a-valid-ticker",
+            venue="kalshi",
+            external_id="not-a-valid-ticker",
+            title="Some market",
+            yes_price=Decimal("0.5"),
+            no_price=Decimal("0.5"),
+        )
+        result = matcher._parse_kalshi_ticker(market)
+        assert result is None
+
+    def test_uses_external_id_for_ticker(self) -> None:
+        """Should prefer external_id for ticker extraction."""
+        matcher = MarketMatcher(scanner=None)  # type: ignore[arg-type]
+        market = Market(
+            id="kalshi:some-internal-id",
+            venue="kalshi",
+            external_id="BTCUSD-26FEB04-T104000",
+            title="BTC above $104,000?",
+            yes_price=Decimal("0.5"),
+            no_price=Decimal("0.5"),
+        )
+        result = matcher._parse_kalshi_ticker(market)
+        assert result is not None
+        assert result.asset == "BTC"
+
+    def test_falls_back_to_market_id_when_no_external_id(self) -> None:
+        """Should fall back to parsing market id if external_id is empty."""
+        matcher = MarketMatcher(scanner=None)  # type: ignore[arg-type]
+        market = Market(
+            id="kalshi:GDPUSD-26FEB04-T200",
+            venue="kalshi",
+            external_id="",
+            title="GDP market",
+            yes_price=Decimal("0.5"),
+            no_price=Decimal("0.5"),
+        )
+        # Note: GDPUSD is not in mapping, but GDP is. The ticker has GDPUSD.
+        # This should return None since GDPUSD isn't in the mapping.
+        result = matcher._parse_kalshi_ticker(market)
+        assert result is None
+
+
+class TestKalshiAssetToOracle:
+    """Tests for the KALSHI_ASSET_TO_ORACLE mapping."""
+
+    def test_btcusd_maps_to_btc(self) -> None:
+        """BTCUSD should map to BTC oracle symbol."""
+        assert KALSHI_ASSET_TO_ORACLE["BTCUSD"] == "BTC"
+
+    def test_ethusd_maps_to_eth(self) -> None:
+        """ETHUSD should map to ETH oracle symbol."""
+        assert KALSHI_ASSET_TO_ORACLE["ETHUSD"] == "ETH"
+
+    def test_fedrate_maps_to_fed_rate(self) -> None:
+        """FEDRATE should map to FED_RATE oracle symbol."""
+        assert KALSHI_ASSET_TO_ORACLE["FEDRATE"] == "FED_RATE"
+
+    def test_unemployment_maps_to_unemployment(self) -> None:
+        """UNEMPLOYMENT should map to UNEMPLOYMENT oracle symbol."""
+        assert KALSHI_ASSET_TO_ORACLE["UNEMPLOYMENT"] == "UNEMPLOYMENT"
+
+    def test_initialclaims_maps_to_initial_claims(self) -> None:
+        """INITIALCLAIMS should map to INITIAL_CLAIMS oracle symbol."""
+        assert KALSHI_ASSET_TO_ORACLE["INITIALCLAIMS"] == "INITIAL_CLAIMS"

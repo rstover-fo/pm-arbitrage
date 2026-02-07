@@ -57,4 +57,5 @@ if order.status == OrderStatus.REJECTED:
 
 - `src/pm_arb/adapters/oracles/coingecko.py`
 - `src/pm_arb/adapters/oracles/crypto.py` (Binance)
+- `src/pm_arb/adapters/oracles/weather.py` (NWS)
 - `src/pm_arb/adapters/venues/polymarket.py`

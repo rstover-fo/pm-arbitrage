@@ -103,11 +103,17 @@ class OpportunityScannerAgent(BaseAgent):
             self._market_to_event[market_id] = event_id
 
     def _is_fee_market(self, market: Market) -> bool:
-        """Check if market has taker fees (15-min crypto markets).
+        """Check if market has taker fees.
 
+        Kalshi charges fees on ALL markets.
         Polymarket charges taker fees on 15-minute crypto markets only.
-        All other markets (longer duration, non-crypto) are fee-free.
+        All other Polymarket markets (longer duration, non-crypto) are fee-free.
         """
+        # Kalshi charges fees on all markets
+        if market.venue == "kalshi":
+            return True
+
+        # Polymarket: only 15-min crypto markets have fees
         title_lower = market.title.lower()
 
         # Must be crypto-related
@@ -133,6 +139,17 @@ class OpportunityScannerAgent(BaseAgent):
         fee_rate = Decimal("0.0312") * distance_from_edge
         return fee_rate
 
+    def _calculate_kalshi_fee(self, price: Decimal) -> Decimal:
+        """Calculate Kalshi fee rate.
+
+        Kalshi charges ~2 cents per contract per side.
+        Fee rate relative to contract price varies with price.
+        """
+        fee_per_contract = Decimal("0.02")
+        if price <= Decimal("0") or price >= Decimal("1"):
+            return Decimal("0")
+        return fee_per_contract / price
+
     def _calculate_net_edge(
         self,
         gross_edge: Decimal,
@@ -149,11 +166,13 @@ class OpportunityScannerAgent(BaseAgent):
         Returns:
             Tuple of (net_edge, fee_rate)
         """
-        if self._is_fee_market(market):
+        if market.venue == "kalshi":
+            fee_rate = self._calculate_kalshi_fee(entry_price)
+            return gross_edge - fee_rate, fee_rate
+        elif self._is_fee_market(market):
             fee_rate = self._calculate_taker_fee(entry_price)
-            net_edge = gross_edge - fee_rate
-            return net_edge, fee_rate
-        return gross_edge, Decimal("0")  # No fees on non-15-min markets
+            return gross_edge - fee_rate, fee_rate
+        return gross_edge, Decimal("0")  # No fees on non-fee markets
 
     async def handle_message(self, channel: str, data: dict[str, Any]) -> None:
         """Route messages to appropriate handler."""

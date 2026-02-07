@@ -677,6 +677,199 @@ async def test_fee_filters_marginal_opportunity() -> None:
 
 
 # =============================================================================
+# Kalshi Fee Tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_kalshi_market_is_fee_market(scanner_with_fees: OpportunityScannerAgent) -> None:
+    """All Kalshi markets should be identified as fee markets, regardless of title."""
+    from pm_arb.core.models import Market
+
+    # Kalshi political market - should have fees (Kalshi fees apply to ALL markets)
+    kalshi_political = Market(
+        id="kalshi:election-2026",
+        venue="kalshi",
+        external_id="election-2026",
+        title="Will the Democrats win the 2026 midterms?",
+        yes_price=Decimal("0.55"),
+        no_price=Decimal("0.45"),
+    )
+    assert scanner_with_fees._is_fee_market(kalshi_political) is True
+
+    # Kalshi crypto market - should also have fees
+    kalshi_crypto = Market(
+        id="kalshi:btc-above-100k",
+        venue="kalshi",
+        external_id="btc-above-100k",
+        title="Will BTC be above $100k by end of January?",
+        yes_price=Decimal("0.70"),
+        no_price=Decimal("0.30"),
+    )
+    assert scanner_with_fees._is_fee_market(kalshi_crypto) is True
+
+    # Kalshi sports market - should also have fees
+    kalshi_sports = Market(
+        id="kalshi:superbowl-chiefs",
+        venue="kalshi",
+        external_id="superbowl-chiefs",
+        title="Will the Chiefs win the Super Bowl?",
+        yes_price=Decimal("0.40"),
+        no_price=Decimal("0.60"),
+    )
+    assert scanner_with_fees._is_fee_market(kalshi_sports) is True
+
+
+@pytest.mark.asyncio
+async def test_kalshi_fee_calculation(scanner_with_fees: OpportunityScannerAgent) -> None:
+    """Kalshi fee should be 2 cents / price, varying by price point."""
+    # At 50 cents: 0.02 / 0.50 = 0.04 (4%)
+    fee_at_50 = scanner_with_fees._calculate_kalshi_fee(Decimal("0.50"))
+    assert fee_at_50 == Decimal("0.04")
+
+    # At 25 cents: 0.02 / 0.25 = 0.08 (8%)
+    fee_at_25 = scanner_with_fees._calculate_kalshi_fee(Decimal("0.25"))
+    assert fee_at_25 == Decimal("0.08")
+
+    # At 80 cents: 0.02 / 0.80 = 0.025 (2.5%)
+    fee_at_80 = scanner_with_fees._calculate_kalshi_fee(Decimal("0.80"))
+    assert fee_at_80 == Decimal("0.025")
+
+    # Edge cases: price at 0 or 1 should return 0
+    assert scanner_with_fees._calculate_kalshi_fee(Decimal("0")) == Decimal("0")
+    assert scanner_with_fees._calculate_kalshi_fee(Decimal("1")) == Decimal("0")
+
+
+@pytest.mark.asyncio
+async def test_kalshi_net_edge_reduces_by_fee(
+    scanner_with_fees: OpportunityScannerAgent,
+) -> None:
+    """Net edge on Kalshi markets should be reduced by Kalshi fee rate."""
+    from pm_arb.core.models import Market
+
+    kalshi_market = Market(
+        id="kalshi:test-market",
+        venue="kalshi",
+        external_id="test-market",
+        title="Test Kalshi market",
+        yes_price=Decimal("0.50"),
+        no_price=Decimal("0.50"),
+    )
+
+    gross_edge = Decimal("0.10")  # 10% gross edge
+    entry_price = Decimal("0.50")
+
+    net_edge, fee_rate = scanner_with_fees._calculate_net_edge(
+        gross_edge, kalshi_market, entry_price
+    )
+
+    # Fee at 0.50 = 0.02 / 0.50 = 0.04
+    assert fee_rate == Decimal("0.04")
+    # Net edge = 0.10 - 0.04 = 0.06
+    assert net_edge == Decimal("0.06")
+
+
+@pytest.mark.asyncio
+async def test_kalshi_low_edge_filtered_after_fees() -> None:
+    """Kalshi opportunity with small edge should be filtered out after fees."""
+    scanner = OpportunityScannerAgent(
+        redis_url="redis://localhost:6379",
+        venue_channels=["venue.kalshi.prices"],
+        oracle_channels=["oracle.binance.BTC"],
+        min_edge_pct=Decimal("0.05"),  # 5% minimum net edge
+        min_signal_strength=Decimal("0.01"),
+    )
+
+    scanner.register_market_oracle_mapping(
+        market_id="kalshi:btc-above-100k",
+        oracle_symbol="BTC",
+        threshold=Decimal("100000"),
+        direction="above",
+    )
+
+    published: list[tuple[str, dict[str, Any]]] = []
+
+    async def capture_publish(channel: str, data: dict[str, Any]) -> str:
+        published.append((channel, data))
+        return "mock-id"
+
+    scanner.publish = capture_publish  # type: ignore[method-assign]
+
+    # Oracle 6% above threshold — fair YES ~0.95
+    await scanner._handle_oracle_data(
+        "oracle.binance.BTC",
+        {
+            "source": "binance",
+            "symbol": "BTC",
+            "value": "106000",
+            "timestamp": datetime.now(UTC).isoformat(),
+        },
+    )
+
+    # Market YES at 0.90 — gross edge = 0.95 - 0.90 = 0.05
+    # Kalshi fee at 0.90 = 0.02 / 0.90 ≈ 0.022
+    # Net edge ≈ 0.05 - 0.022 ≈ 0.028 < 0.05 min threshold
+    await scanner._handle_venue_price(
+        "venue.kalshi.prices",
+        {
+            "market_id": "kalshi:btc-above-100k",
+            "venue": "kalshi",
+            "title": "Will BTC be above $100k?",
+            "yes_price": "0.90",
+            "no_price": "0.10",
+        },
+    )
+
+    # Should NOT detect — net edge below threshold after Kalshi fees
+    assert len(published) == 0
+
+
+@pytest.mark.asyncio
+async def test_polymarket_fee_logic_unchanged(
+    scanner_with_fees: OpportunityScannerAgent,
+) -> None:
+    """Existing Polymarket fee logic should be unaffected by Kalshi changes."""
+    from pm_arb.core.models import Market
+
+    # 15-min crypto market on Polymarket — should still use Polymarket fee
+    pm_fee_market = Market(
+        id="polymarket:btc-15min",
+        venue="polymarket",
+        external_id="btc-15min",
+        title="BTC above $100k in 15 minutes?",
+        yes_price=Decimal("0.50"),
+        no_price=Decimal("0.50"),
+    )
+    assert scanner_with_fees._is_fee_market(pm_fee_market) is True
+
+    gross_edge = Decimal("0.05")
+    entry_price = Decimal("0.50")
+    net_edge, fee_rate = scanner_with_fees._calculate_net_edge(
+        gross_edge, pm_fee_market, entry_price
+    )
+    # Polymarket fee at 0.50 = 0.0156 (NOT Kalshi's 0.04)
+    assert fee_rate == Decimal("0.0156")
+    assert net_edge == Decimal("0.0344")
+
+    # Non-fee Polymarket market — should have zero fees
+    pm_no_fee_market = Market(
+        id="polymarket:election",
+        venue="polymarket",
+        external_id="election",
+        title="Will Trump win the 2026 election?",
+        yes_price=Decimal("0.50"),
+        no_price=Decimal("0.50"),
+    )
+    assert scanner_with_fees._is_fee_market(pm_no_fee_market) is False
+
+    net_edge2, fee_rate2 = scanner_with_fees._calculate_net_edge(
+        gross_edge, pm_no_fee_market, entry_price
+    )
+    assert fee_rate2 == Decimal("0")
+    assert net_edge2 == gross_edge
+
+
+# =============================================================================
 # Resolved Market Filter Tests
 # =============================================================================
 

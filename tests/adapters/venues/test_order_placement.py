@@ -1,13 +1,13 @@
-"""Tests for order placement on Polymarket."""
+"""Tests for order placement on Polymarket via the generic VenueAdapter interface."""
 
 from decimal import Decimal
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from pm_arb.adapters.venues.polymarket import PolymarketAdapter
 from pm_arb.core.auth import PolymarketCredentials
-from pm_arb.core.models import OrderStatus, OrderType, Side
+from pm_arb.core.models import Side, TradeRequest, TradeStatus
 
 
 @pytest.fixture
@@ -20,9 +20,25 @@ def mock_credentials() -> PolymarketCredentials:
     )
 
 
+def _make_trade_request(**overrides) -> TradeRequest:
+    """Helper to create a TradeRequest with sensible defaults."""
+    defaults = {
+        "id": "req-001",
+        "opportunity_id": "opp-001",
+        "strategy": "oracle-sniper",
+        "market_id": "polymarket:market-abc",
+        "side": Side.BUY,
+        "outcome": "YES",
+        "amount": Decimal("10"),
+        "max_price": Decimal("0.52"),
+    }
+    defaults.update(overrides)
+    return TradeRequest(**defaults)
+
+
 @pytest.mark.asyncio
 async def test_place_market_order(mock_credentials: PolymarketCredentials) -> None:
-    """Should place market buy order."""
+    """Should place order and return Trade via generic interface."""
     adapter = PolymarketAdapter(credentials=mock_credentials)
 
     mock_response = {
@@ -42,22 +58,30 @@ async def test_place_market_order(mock_credentials: PolymarketCredentials) -> No
         mock_clob.return_value = mock_instance
 
         await adapter.connect()
-        order = await adapter.place_order(
-            token_id="token-abc",
-            side=Side.BUY,
-            amount=Decimal("10"),
-            order_type=OrderType.MARKET,
-        )
 
-        assert order.external_id == "order-123"
-        assert order.status == OrderStatus.FILLED
-        assert order.filled_amount == Decimal("10.0")
-        assert order.average_price == Decimal("0.52")
+        # Mock get_token_id since place_order now calls it internally
+        adapter.get_token_id = AsyncMock(return_value="token-abc")
+
+        request = _make_trade_request()
+        trade = await adapter.place_order(request)
+
+        assert trade.external_id == "order-123"
+        assert trade.status == TradeStatus.FILLED
+        assert trade.amount == Decimal("10.0")
+        assert trade.price == Decimal("0.52")
+        assert trade.venue == "polymarket"
+        assert trade.request_id == "req-001"
+        assert trade.market_id == "polymarket:market-abc"
+        assert trade.side == Side.BUY
+        assert trade.outcome == "YES"
+
+        # Verify get_token_id was called with correct args
+        adapter.get_token_id.assert_called_once_with("polymarket:market-abc", "YES")
 
 
 @pytest.mark.asyncio
 async def test_place_limit_order(mock_credentials: PolymarketCredentials) -> None:
-    """Should place limit order at specified price."""
+    """Should place limit order using max_price from TradeRequest."""
     adapter = PolymarketAdapter(credentials=mock_credentials)
 
     mock_response = {
@@ -76,60 +100,34 @@ async def test_place_limit_order(mock_credentials: PolymarketCredentials) -> Non
         mock_clob.return_value = mock_instance
 
         await adapter.connect()
-        order = await adapter.place_order(
-            token_id="token-abc",
-            side=Side.BUY,
-            amount=Decimal("10"),
-            order_type=OrderType.LIMIT,
-            price=Decimal("0.50"),
-        )
+        adapter.get_token_id = AsyncMock(return_value="token-abc")
 
-        assert order.external_id == "order-456"
-        assert order.status == OrderStatus.OPEN
-        assert order.price == Decimal("0.50")
+        request = _make_trade_request(max_price=Decimal("0.50"))
+        trade = await adapter.place_order(request)
+
+        assert trade.external_id == "order-456"
+        assert trade.status == TradeStatus.SUBMITTED
+        assert trade.price == Decimal("0.50")
+
+        # Verify CLOB client was called with price for limit order
+        call_args = mock_instance.create_and_post_order.call_args[0][0]
+        assert call_args["price"] == 0.50
 
 
 @pytest.mark.asyncio
-async def test_place_order_requires_auth(mock_credentials: PolymarketCredentials) -> None:
+async def test_place_order_requires_auth() -> None:
     """Should fail to place order without authentication."""
     adapter = PolymarketAdapter()  # No credentials
     await adapter.connect()
 
+    request = _make_trade_request()
     with pytest.raises(RuntimeError, match="Not authenticated"):
-        await adapter.place_order(
-            token_id="token-abc",
-            side=Side.BUY,
-            amount=Decimal("10"),
-            order_type=OrderType.MARKET,
-        )
-
-
-@pytest.mark.asyncio
-async def test_limit_order_requires_price(mock_credentials: PolymarketCredentials) -> None:
-    """Limit orders should require a price."""
-    adapter = PolymarketAdapter(credentials=mock_credentials)
-
-    with (
-        patch("pm_arb.adapters.venues.polymarket.HAS_CLOB_CLIENT", True),
-        patch("pm_arb.adapters.venues.polymarket.ClobClient") as mock_clob,
-        patch("pm_arb.adapters.venues.polymarket.ApiCreds"),
-    ):
-        mock_clob.return_value = MagicMock()
-        await adapter.connect()
-
-        with pytest.raises(ValueError, match="Price required"):
-            await adapter.place_order(
-                token_id="token-abc",
-                side=Side.BUY,
-                amount=Decimal("10"),
-                order_type=OrderType.LIMIT,
-                # Missing price!
-            )
+        await adapter.place_order(request)
 
 
 @pytest.mark.asyncio
 async def test_place_order_handles_rejection(mock_credentials: PolymarketCredentials) -> None:
-    """Should handle order rejection gracefully."""
+    """Should handle order rejection gracefully, returning Trade with FAILED status."""
     adapter = PolymarketAdapter(credentials=mock_credentials)
 
     with (
@@ -142,12 +140,45 @@ async def test_place_order_handles_rejection(mock_credentials: PolymarketCredent
         mock_clob.return_value = mock_instance
 
         await adapter.connect()
-        order = await adapter.place_order(
-            token_id="token-abc",
-            side=Side.BUY,
-            amount=Decimal("10"),
-            order_type=OrderType.MARKET,
-        )
+        adapter.get_token_id = AsyncMock(return_value="token-abc")
 
-        assert order.status == OrderStatus.REJECTED
-        assert "Insufficient balance" in (order.error_message or "")
+        request = _make_trade_request()
+        trade = await adapter.place_order(request)
+
+        assert trade.status == TradeStatus.FAILED
+        assert trade.venue == "polymarket"
+        assert trade.request_id == "req-001"
+
+
+@pytest.mark.asyncio
+async def test_place_order_returns_trade_not_order(
+    mock_credentials: PolymarketCredentials,
+) -> None:
+    """Verify place_order returns a Trade (not Order) matching the VenueAdapter contract."""
+    from pm_arb.core.models import Trade
+
+    adapter = PolymarketAdapter(credentials=mock_credentials)
+
+    mock_response = {
+        "orderID": "order-789",
+        "status": "MATCHED",
+        "filledAmount": "5.0",
+        "averagePrice": "0.60",
+    }
+
+    with (
+        patch("pm_arb.adapters.venues.polymarket.HAS_CLOB_CLIENT", True),
+        patch("pm_arb.adapters.venues.polymarket.ClobClient") as mock_clob,
+        patch("pm_arb.adapters.venues.polymarket.ApiCreds"),
+    ):
+        mock_instance = MagicMock()
+        mock_instance.create_and_post_order.return_value = mock_response
+        mock_clob.return_value = mock_instance
+
+        await adapter.connect()
+        adapter.get_token_id = AsyncMock(return_value="token-xyz")
+
+        request = _make_trade_request()
+        result = await adapter.place_order(request)
+
+        assert isinstance(result, Trade)

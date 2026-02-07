@@ -1,68 +1,86 @@
-"""Tests for Live Executor agent."""
+"""Tests for Live Executor agent with generic VenueAdapter interface."""
 
 from decimal import Decimal
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from pm_arb.agents.live_executor import LiveExecutorAgent
-from pm_arb.core.auth import PolymarketCredentials
-from pm_arb.core.models import OrderStatus
+from pm_arb.core.models import Side, Trade, TradeStatus
 
 
-@pytest.fixture
-def mock_credentials() -> PolymarketCredentials:
-    return PolymarketCredentials(
-        api_key="test",
-        secret="test",
-        passphrase="test",
-        private_key="0x" + "a" * 64,
-    )
+def _make_mock_adapter(**overrides) -> MagicMock:
+    """Create a mock VenueAdapter."""
+    adapter = AsyncMock()
+    adapter.name = "polymarket"
+    adapter.is_connected = True
+    adapter.get_balance.return_value = Decimal("1000")
+    for k, v in overrides.items():
+        setattr(adapter, k, v)
+    return adapter
 
 
-@pytest.mark.asyncio
-async def test_executor_processes_approved_trade(mock_credentials: PolymarketCredentials) -> None:
-    """Should execute approved trade via venue adapter."""
-    executor = LiveExecutorAgent(
+def _make_trade(request_id: str = "req-001", **overrides) -> Trade:
+    """Create a Trade result with sensible defaults."""
+    defaults = {
+        "id": "trade-001",
+        "request_id": request_id,
+        "market_id": "polymarket:test-market",
+        "venue": "polymarket",
+        "side": Side.BUY,
+        "outcome": "YES",
+        "amount": Decimal("10"),
+        "price": Decimal("0.50"),
+        "status": TradeStatus.FILLED,
+        "external_id": "ext-123",
+    }
+    defaults.update(overrides)
+    return Trade(**defaults)
+
+
+def _make_executor(adapters: dict[str, Any] | None = None) -> LiveExecutorAgent:
+    """Create a LiveExecutorAgent with mock adapters."""
+    if adapters is None:
+        adapters = {"polymarket": _make_mock_adapter()}
+    return LiveExecutorAgent(
         redis_url="redis://localhost:6379",
-        credentials={"polymarket": mock_credentials},
+        adapters=adapters,
     )
 
-    # Track published results
+
+def _capture_publish(executor: LiveExecutorAgent) -> list[tuple[str, dict[str, Any]]]:
+    """Attach a publish capture to executor, return results list."""
     results: list[tuple[str, dict[str, Any]]] = []
 
-    async def capture_publish(channel: str, data: dict[str, Any]) -> str:
+    async def capture(channel: str, data: dict[str, Any]) -> str:
         results.append((channel, data))
         return "msg-id"
 
-    executor.publish = capture_publish  # type: ignore[method-assign]
+    executor.publish = capture  # type: ignore[method-assign]
+    return results
 
-    # Mock the adapter's place_order
-    mock_order_response = MagicMock()
-    mock_order_response.external_id = "ext-123"
-    mock_order_response.status = OrderStatus.FILLED
-    mock_order_response.filled_amount = Decimal("10")
-    mock_order_response.average_price = Decimal("0.50")
-    mock_order_response.error_message = None
 
-    with patch.object(executor, "_get_adapter") as mock_get_adapter:
-        mock_adapter = AsyncMock()
-        mock_adapter.is_connected = True
-        mock_adapter.get_balance.return_value = Decimal("1000")  # Sufficient balance
-        mock_adapter.place_order.return_value = mock_order_response
-        mock_get_adapter.return_value = mock_adapter
+@pytest.mark.asyncio
+async def test_executor_processes_approved_trade() -> None:
+    """Should execute approved trade via generic VenueAdapter.place_order()."""
+    mock_adapter = _make_mock_adapter()
+    mock_adapter.place_order.return_value = _make_trade()
+    executor = _make_executor({"polymarket": mock_adapter})
+    results = _capture_publish(executor)
 
-        await executor._execute_trade(
-            {
-                "request_id": "req-001",
-                "market_id": "polymarket:test-market",
-                "token_id": "token-abc",
-                "side": "buy",
-                "amount": "10",
-                "max_price": "0.55",
-            }
-        )
+    await executor._execute_trade(
+        {
+            "request_id": "req-001",
+            "market_id": "polymarket:test-market",
+            "side": "buy",
+            "outcome": "YES",
+            "amount": "10",
+            "max_price": "0.55",
+            "opportunity_id": "opp-001",
+            "strategy": "oracle-sniper",
+        }
+    )
 
     # Should publish trade result
     assert len(results) == 1
@@ -70,150 +88,87 @@ async def test_executor_processes_approved_trade(mock_credentials: PolymarketCre
     assert results[0][1]["request_id"] == "req-001"
     assert results[0][1]["status"] == "filled"
 
+    # place_order should have been called with a TradeRequest
+    mock_adapter.place_order.assert_called_once()
+    trade_request = mock_adapter.place_order.call_args[0][0]
+    assert trade_request.market_id == "polymarket:test-market"
+    assert trade_request.side == Side.BUY
+    assert trade_request.outcome == "YES"
+
 
 @pytest.mark.asyncio
-async def test_executor_reports_failure(mock_credentials: PolymarketCredentials) -> None:
-    """Should report when trade execution fails."""
-    executor = LiveExecutorAgent(
-        redis_url="redis://localhost:6379",
-        credentials={"polymarket": mock_credentials},
+async def test_executor_handles_failed_trade() -> None:
+    """Should report when trade execution returns FAILED status."""
+    mock_adapter = _make_mock_adapter()
+    mock_adapter.place_order.return_value = _make_trade(status=TradeStatus.FAILED)
+    executor = _make_executor({"polymarket": mock_adapter})
+    results = _capture_publish(executor)
+
+    await executor._execute_trade(
+        {
+            "request_id": "req-002",
+            "market_id": "polymarket:test",
+            "side": "buy",
+            "outcome": "YES",
+            "amount": "100",
+            "max_price": "0.50",
+        }
     )
-
-    results: list[tuple[str, dict[str, Any]]] = []
-
-    async def capture_publish(channel: str, data: dict[str, Any]) -> str:
-        results.append((channel, data))
-        return "msg-id"
-
-    executor.publish = capture_publish  # type: ignore[method-assign]
-
-    mock_order_response = MagicMock()
-    mock_order_response.status = OrderStatus.REJECTED
-    mock_order_response.error_message = "Insufficient balance"
-    mock_order_response.external_id = ""
-    mock_order_response.filled_amount = Decimal("0")
-    mock_order_response.average_price = None
-
-    with patch.object(executor, "_get_adapter") as mock_get_adapter:
-        mock_adapter = AsyncMock()
-        mock_adapter.is_connected = True
-        mock_adapter.get_balance.return_value = Decimal("1000")  # Sufficient balance
-        mock_adapter.place_order.return_value = mock_order_response
-        mock_get_adapter.return_value = mock_adapter
-
-        await executor._execute_trade(
-            {
-                "request_id": "req-002",
-                "market_id": "polymarket:test",
-                "token_id": "token-xyz",
-                "side": "buy",
-                "amount": "100",
-                "max_price": "0.50",
-            }
-        )
 
     assert len(results) == 1
-    assert results[0][1]["status"] == "rejected"
-    assert "Insufficient balance" in results[0][1]["error"]
+    assert results[0][1]["status"] == "failed"
 
 
 @pytest.mark.asyncio
-async def test_executor_subscribes_to_approved_trades(
-    mock_credentials: PolymarketCredentials,
-) -> None:
+async def test_executor_subscribes_to_trade_channels() -> None:
     """Executor should subscribe to trade decisions and requests channels."""
-    executor = LiveExecutorAgent(
-        redis_url="redis://localhost:6379",
-        credentials={"polymarket": mock_credentials},
-    )
-
+    executor = _make_executor()
     subs = executor.get_subscriptions()
 
-    # LiveExecutor now subscribes to same channels as PaperExecutor
     assert "trade.decisions" in subs
     assert "trade.requests" in subs
 
 
 @pytest.mark.asyncio
-async def test_executor_connects_adapter_when_needed(
-    mock_credentials: PolymarketCredentials,
-) -> None:
+async def test_executor_connects_adapter_when_needed() -> None:
     """Executor should connect adapter if not already connected."""
-    executor = LiveExecutorAgent(
-        redis_url="redis://localhost:6379",
-        credentials={"polymarket": mock_credentials},
+    mock_adapter = _make_mock_adapter(is_connected=False)
+    mock_adapter.place_order.return_value = _make_trade()
+    executor = _make_executor({"polymarket": mock_adapter})
+    _capture_publish(executor)
+
+    await executor._execute_trade(
+        {
+            "request_id": "req-003",
+            "market_id": "polymarket:test",
+            "side": "buy",
+            "outcome": "YES",
+            "amount": "10",
+            "max_price": "0.55",
+        }
     )
 
-    results: list[tuple[str, dict[str, Any]]] = []
-
-    async def capture_publish(channel: str, data: dict[str, Any]) -> str:
-        results.append((channel, data))
-        return "msg-id"
-
-    executor.publish = capture_publish  # type: ignore[method-assign]
-
-    mock_order_response = MagicMock()
-    mock_order_response.external_id = "ext-456"
-    mock_order_response.status = OrderStatus.FILLED
-    mock_order_response.filled_amount = Decimal("10")
-    mock_order_response.average_price = Decimal("0.50")
-    mock_order_response.error_message = None
-
-    with patch.object(executor, "_get_adapter") as mock_get_adapter:
-        mock_adapter = AsyncMock()
-        mock_adapter.is_connected = False  # Not yet connected
-        mock_adapter.get_balance.return_value = Decimal("1000")  # Sufficient balance
-        mock_adapter.place_order.return_value = mock_order_response
-        mock_get_adapter.return_value = mock_adapter
-
-        await executor._execute_trade(
-            {
-                "request_id": "req-003",
-                "market_id": "polymarket:test",
-                "token_id": "token-abc",
-                "side": "buy",
-                "amount": "10",
-                "max_price": "0.55",
-            }
-        )
-
-        # Should have called connect()
-        mock_adapter.connect.assert_called_once()
+    mock_adapter.connect.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_executor_handles_exception(mock_credentials: PolymarketCredentials) -> None:
+async def test_executor_handles_exception() -> None:
     """Executor should handle adapter exceptions gracefully."""
-    executor = LiveExecutorAgent(
-        redis_url="redis://localhost:6379",
-        credentials={"polymarket": mock_credentials},
+    mock_adapter = _make_mock_adapter()
+    mock_adapter.place_order.side_effect = Exception("Network timeout")
+    executor = _make_executor({"polymarket": mock_adapter})
+    results = _capture_publish(executor)
+
+    await executor._execute_trade(
+        {
+            "request_id": "req-004",
+            "market_id": "polymarket:test",
+            "side": "buy",
+            "outcome": "YES",
+            "amount": "10",
+            "max_price": "0.55",
+        }
     )
-
-    results: list[tuple[str, dict[str, Any]]] = []
-
-    async def capture_publish(channel: str, data: dict[str, Any]) -> str:
-        results.append((channel, data))
-        return "msg-id"
-
-    executor.publish = capture_publish  # type: ignore[method-assign]
-
-    with patch.object(executor, "_get_adapter") as mock_get_adapter:
-        mock_adapter = AsyncMock()
-        mock_adapter.is_connected = True
-        mock_adapter.get_balance.return_value = Decimal("1000")  # Sufficient balance
-        mock_adapter.place_order.side_effect = Exception("Network timeout")
-        mock_get_adapter.return_value = mock_adapter
-
-        await executor._execute_trade(
-            {
-                "request_id": "req-004",
-                "market_id": "polymarket:test",
-                "token_id": "token-abc",
-                "side": "buy",
-                "amount": "10",
-                "max_price": "0.55",
-            }
-        )
 
     assert len(results) == 1
     assert results[0][1]["status"] == "rejected"
@@ -221,42 +176,26 @@ async def test_executor_handles_exception(mock_credentials: PolymarketCredential
 
 
 @pytest.mark.asyncio
-async def test_executor_rejects_insufficient_balance(
-    mock_credentials: PolymarketCredentials,
-) -> None:
+async def test_executor_rejects_insufficient_balance() -> None:
     """Executor should reject trade when balance is insufficient."""
-    executor = LiveExecutorAgent(
-        redis_url="redis://localhost:6379",
-        credentials={"polymarket": mock_credentials},
+    mock_adapter = _make_mock_adapter()
+    mock_adapter.get_balance.return_value = Decimal("1")  # Only $1 available
+    executor = _make_executor({"polymarket": mock_adapter})
+    results = _capture_publish(executor)
+
+    await executor._execute_trade(
+        {
+            "request_id": "req-005",
+            "market_id": "polymarket:test",
+            "side": "buy",
+            "outcome": "YES",
+            "amount": "100",  # 100 tokens
+            "max_price": "0.50",  # at $0.50 = $50 required
+        }
     )
 
-    results: list[tuple[str, dict[str, Any]]] = []
-
-    async def capture_publish(channel: str, data: dict[str, Any]) -> str:
-        results.append((channel, data))
-        return "msg-id"
-
-    executor.publish = capture_publish  # type: ignore[method-assign]
-
-    with patch.object(executor, "_get_adapter") as mock_get_adapter:
-        mock_adapter = AsyncMock()
-        mock_adapter.is_connected = True
-        mock_adapter.get_balance.return_value = Decimal("1")  # Only $1 available
-        mock_get_adapter.return_value = mock_adapter
-
-        await executor._execute_trade(
-            {
-                "request_id": "req-005",
-                "market_id": "polymarket:test",
-                "token_id": "token-abc",
-                "side": "buy",
-                "amount": "100",  # 100 tokens
-                "max_price": "0.50",  # at $0.50 = $50 required
-            }
-        )
-
-        # place_order should NOT have been called
-        mock_adapter.place_order.assert_not_called()
+    # place_order should NOT have been called
+    mock_adapter.place_order.assert_not_called()
 
     assert len(results) == 1
     assert results[0][1]["status"] == "rejected"
@@ -264,55 +203,49 @@ async def test_executor_rejects_insufficient_balance(
 
 
 @pytest.mark.asyncio
-async def test_executor_resolves_token_id(mock_credentials: PolymarketCredentials) -> None:
-    """Executor should resolve token_id when not provided in request."""
-    executor = LiveExecutorAgent(
-        redis_url="redis://localhost:6379",
-        credentials={"polymarket": mock_credentials},
+async def test_executor_skips_balance_check_when_not_supported() -> None:
+    """Executor should proceed if adapter doesn't support balance queries."""
+    mock_adapter = _make_mock_adapter()
+    mock_adapter.get_balance.side_effect = NotImplementedError("No balance support")
+    mock_adapter.place_order.return_value = _make_trade()
+    executor = _make_executor({"polymarket": mock_adapter})
+    results = _capture_publish(executor)
+
+    await executor._execute_trade(
+        {
+            "request_id": "req-006",
+            "market_id": "polymarket:test",
+            "side": "buy",
+            "outcome": "YES",
+            "amount": "10",
+            "max_price": "0.55",
+        }
     )
 
-    results: list[tuple[str, dict[str, Any]]] = []
-
-    async def capture_publish(channel: str, data: dict[str, Any]) -> str:
-        results.append((channel, data))
-        return "msg-id"
-
-    executor.publish = capture_publish  # type: ignore[method-assign]
-
-    mock_order_response = MagicMock()
-    mock_order_response.external_id = "ext-789"
-    mock_order_response.status = OrderStatus.FILLED
-    mock_order_response.filled_amount = Decimal("10")
-    mock_order_response.average_price = Decimal("0.50")
-    mock_order_response.error_message = None
-
-    with patch.object(executor, "_get_adapter") as mock_get_adapter:
-        mock_adapter = AsyncMock()
-        mock_adapter.is_connected = True
-        mock_adapter.get_balance.return_value = Decimal("1000")
-        mock_adapter.get_token_id.return_value = "resolved-token-123"
-        mock_adapter.place_order.return_value = mock_order_response
-        mock_get_adapter.return_value = mock_adapter
-
-        await executor._execute_trade(
-            {
-                "request_id": "req-006",
-                "market_id": "polymarket:test-market",
-                # No token_id provided - should be resolved
-                "outcome": "YES",
-                "side": "buy",
-                "amount": "10",
-                "max_price": "0.55",
-            }
-        )
-
-        # get_token_id should have been called
-        mock_adapter.get_token_id.assert_called_once_with("polymarket:test-market", "YES")
-
-        # place_order should use resolved token_id
-        mock_adapter.place_order.assert_called_once()
-        call_args = mock_adapter.place_order.call_args
-        assert call_args.kwargs["token_id"] == "resolved-token-123"
-
+    # Should still place order despite balance check failure
+    mock_adapter.place_order.assert_called_once()
     assert len(results) == 1
     assert results[0][1]["status"] == "filled"
+
+
+@pytest.mark.asyncio
+async def test_executor_unknown_venue_raises() -> None:
+    """Executor should raise when venue has no configured adapter."""
+    executor = _make_executor({"polymarket": _make_mock_adapter()})
+    results = _capture_publish(executor)
+
+    await executor._execute_trade(
+        {
+            "request_id": "req-007",
+            "market_id": "unknown_venue:test",
+            "side": "buy",
+            "outcome": "YES",
+            "amount": "10",
+            "max_price": "0.55",
+        }
+    )
+
+    # Should publish failure
+    assert len(results) == 1
+    assert results[0][1]["status"] == "rejected"
+    assert "No adapter configured" in results[0][1]["error"]

@@ -19,7 +19,7 @@ Eight autonomous agents working together:
 | Agent | Job |
 |-------|-----|
 | **Venue Watchers** | Stream prices from Polymarket, Kalshi |
-| **Oracles** | Stream real-world data (Binance crypto prices, weather APIs) |
+| **Oracles** | Stream real-world data (Binance crypto, FRED economic data, NWS weather) |
 | **Opportunity Scanner** | Detect when markets lag reality |
 | **Strategy Agents** | Compete for capital using different approaches |
 | **Risk Guardian** | Veto power - enforces position limits, drawdown stops |
@@ -53,7 +53,7 @@ Eight autonomous agents working together:
 | Sprint | Status | Deliverable |
 |--------|--------|-------------|
 | 1 | Complete | Foundation - agents communicate via message bus |
-| 2 | In Progress | Live data from Polymarket + Binance |
+| 2 | In Progress | Live data from Polymarket, Kalshi + oracles (Binance, FRED, NWS) |
 | 3 | Planned | Opportunity detection |
 | 4 | Planned | Risk Guardian + paper trading |
 | 5 | Planned | Strategy tournament system |
@@ -69,12 +69,18 @@ docker-compose up -d
 # Install dependencies
 pip install -e ".[dev]"
 
+# Copy and configure environment
+cp .env.example .env
+# Edit .env with your API keys (Polymarket, Kalshi, FRED, etc.)
+
 # Run tests
 pytest tests/ -v
 
 # Run linter
 ruff check src/ tests/
 ```
+
+> **Note on US legal compliance:** Kalshi is a CFTC-regulated exchange available to US residents. Polymarket has restrictions for US-based users. Ensure you comply with local regulations before enabling live trading on any venue.
 
 ## Documentation
 
