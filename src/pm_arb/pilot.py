@@ -13,6 +13,10 @@ import asyncpg
 import structlog
 
 from pm_arb.adapters.oracles.crypto import BinanceOracle
+from pm_arb.adapters.oracles.fred import FredOracle
+from pm_arb.adapters.oracles.weather import WeatherOracle
+from pm_arb.adapters.venues.base import VenueAdapter
+from pm_arb.adapters.venues.kalshi import KalshiAdapter
 from pm_arb.adapters.venues.polymarket import PolymarketAdapter
 from pm_arb.agents.base import BaseAgent
 from pm_arb.agents.capital_allocator import CapitalAllocatorAgent
@@ -105,25 +109,37 @@ class PilotOrchestrator:
 
         logger.info("validating_live_mode")
 
-        # 1. Check credentials exist
-        try:
-            creds = load_credentials("polymarket")
-        except ValueError as e:
-            raise RuntimeError(f"Live mode requires Polymarket credentials: {e}")
+        # Validate each configured venue
+        await self._validate_venue("polymarket")
+        await self._validate_venue("kalshi")
 
-        # 2. Test API connection
-        adapter = PolymarketAdapter(credentials=creds)
+    async def _validate_venue(self, venue: str) -> None:
+        """Validate credentials and connectivity for a single venue.
+
+        Raises RuntimeError if required credentials are missing or auth fails.
+        Silently skips venues that have no credentials configured.
+        """
+        try:
+            creds = load_credentials(venue)
+        except ValueError:
+            logger.info("venue_skipped_no_credentials", venue=venue)
+            return
+
+        if venue == "polymarket":
+            adapter: VenueAdapter = PolymarketAdapter(credentials=creds)
+        elif venue == "kalshi":
+            adapter = KalshiAdapter(credentials=creds)
+        else:
+            return
+
         await adapter.connect()
 
         if not adapter.is_authenticated:
             await adapter.disconnect()
             raise RuntimeError(
-                "Failed to authenticate with Polymarket. "
-                "Check your API credentials (POLYMARKET_API_KEY, POLYMARKET_SECRET, "
-                "POLYMARKET_PASSPHRASE, POLYMARKET_PRIVATE_KEY)."
+                f"Failed to authenticate with {venue}. Check your API credentials."
             )
 
-        # 3. Check wallet balance
         try:
             balance = await adapter.get_balance()
             min_balance = Decimal(str(settings.initial_bankroll))
@@ -131,38 +147,55 @@ class PilotOrchestrator:
             if balance < min_balance:
                 await adapter.disconnect()
                 raise RuntimeError(
-                    f"Insufficient wallet balance: ${balance:.2f} < ${min_balance:.2f} required. "
-                    "Fund your Polymarket wallet with USDC on Polygon."
+                    f"Insufficient {venue} balance: ${balance:.2f} < ${min_balance:.2f} required."
                 )
 
             logger.info(
-                "live_mode_validated",
+                "venue_validated",
+                venue=venue,
                 balance=str(balance),
                 bankroll=str(min_balance),
             )
-        except Exception as e:
-            if "balance" not in str(e).lower():
-                # Don't wrap our own RuntimeError
-                if isinstance(e, RuntimeError):
-                    raise
-                raise RuntimeError(f"Failed to check wallet balance: {e}")
+        except NotImplementedError:
+            logger.info("venue_balance_check_skipped", venue=venue)
+        except RuntimeError:
             raise
+        except Exception as e:
+            raise RuntimeError(f"Failed to check {venue} balance: {e}")
 
         await adapter.disconnect()
 
     async def _create_agents(self) -> list[BaseAgent]:
         """Create all agents in startup order."""
-        # Create adapters
+        agents: list[BaseAgent] = []
+        adapters: dict[str, VenueAdapter] = {}
+
+        # --- Venue Adapters ---
         polymarket_adapter = PolymarketAdapter()
         await polymarket_adapter.connect()
+
+        kalshi_adapter = KalshiAdapter()
+        await kalshi_adapter.connect()
+
+        # --- Oracle Adapters ---
         binance_oracle = BinanceOracle()
+        fred_oracle = FredOracle()
+        weather_oracle = WeatherOracle()
 
-        symbols = ["BTC", "ETH"]
+        crypto_symbols = ["BTC", "ETH"]
+        fred_symbols = ["FED_RATE", "CPI", "UNEMPLOYMENT", "INITIAL_CLAIMS"]
+        weather_symbols = ["TEMP_KNYC", "TEMP_KMIA", "TEMP_KORD"]
 
-        # Define channels for scanner
-        # OracleAgent publishes to oracle.{source}.{SYMBOL} (e.g., oracle.binance.BTC)
-        venue_channels = ["venue.polymarket.prices"]
-        oracle_channels = [f"oracle.binance.{sym}" for sym in symbols]
+        # --- Scanner channels ---
+        venue_channels = [
+            "venue.polymarket.prices",
+            "venue.kalshi.prices",
+        ]
+        oracle_channels = (
+            [f"oracle.binance.{sym}" for sym in crypto_symbols]
+            + [f"oracle.fred.{sym}" for sym in fred_symbols]
+            + [f"oracle.weather.{sym}" for sym in weather_symbols]
+        )
 
         # Create scanner first so we can register mappings
         scanner = OpportunityScannerAgent(
@@ -171,12 +204,13 @@ class PilotOrchestrator:
             oracle_channels=oracle_channels,
         )
 
-        # Match markets to oracles before scanning starts
+        # Match markets to oracles from all venues
         matcher = MarketMatcher(scanner, anthropic_api_key=settings.anthropic_api_key)
-        markets = await polymarket_adapter.get_markets()
-        await matcher.match_markets(markets)
+        all_markets = await polymarket_adapter.get_markets()
+        all_markets.extend(await kalshi_adapter.get_markets())
+        await matcher.match_markets(all_markets)
 
-        # Choose executor based on paper_trading config
+        # --- Executor ---
         if settings.paper_trading:
             executor: BaseAgent = PaperExecutorAgent(
                 self._redis_url,
@@ -184,14 +218,29 @@ class PilotOrchestrator:
             )
             logger.info("executor_mode", mode="paper")
         else:
-            # Live trading mode - load credentials
-            credentials = {"polymarket": load_credentials("polymarket")}
+            # Live trading - create authenticated adapters for each venue
+            try:
+                poly_creds = load_credentials("polymarket")
+                live_poly = PolymarketAdapter(credentials=poly_creds)
+                await live_poly.connect()
+                adapters["polymarket"] = live_poly
+            except ValueError:
+                logger.info("live_adapter_skipped", venue="polymarket")
+
+            try:
+                kalshi_creds = load_credentials("kalshi")
+                live_kalshi = KalshiAdapter(credentials=kalshi_creds)
+                await live_kalshi.connect()
+                adapters["kalshi"] = live_kalshi
+            except ValueError:
+                logger.info("live_adapter_skipped", venue="kalshi")
+
             executor = LiveExecutorAgent(
                 self._redis_url,
-                credentials=credentials,
+                adapters=adapters,
                 db_pool=self._db_pool,
             )
-            logger.info("executor_mode", mode="live")
+            logger.info("executor_mode", mode="live", venues=list(adapters.keys()))
 
         return [
             # Data feeds first
@@ -200,11 +249,28 @@ class PilotOrchestrator:
                 adapter=polymarket_adapter,
                 poll_interval=5.0,
             ),
+            VenueWatcherAgent(
+                self._redis_url,
+                adapter=kalshi_adapter,
+                poll_interval=10.0,
+            ),
             OracleAgent(
                 self._redis_url,
                 oracle=binance_oracle,
-                symbols=symbols,
-                poll_interval=5.0,  # Only used for reconnect timing in streaming mode
+                symbols=crypto_symbols,
+                poll_interval=5.0,
+            ),
+            OracleAgent(
+                self._redis_url,
+                oracle=fred_oracle,
+                symbols=fred_symbols,
+                poll_interval=300.0,  # FRED data updates slowly
+            ),
+            OracleAgent(
+                self._redis_url,
+                oracle=weather_oracle,
+                symbols=weather_symbols,
+                poll_interval=600.0,  # NWS updates ~hourly
             ),
             # Detection layer
             scanner,

@@ -16,6 +16,9 @@ from pm_arb.core.models import (
     OrderStatus,
     OrderType,
     Side,
+    Trade,
+    TradeRequest,
+    TradeStatus,
 )
 
 # Polymarket API endpoints
@@ -368,92 +371,93 @@ class PolymarketAdapter(VenueAdapter):
             asks=asks,
         )
 
-    async def place_order(  # type: ignore[override]
+    async def place_order(
         self,
-        token_id: str,
-        side: Side,
-        amount: Decimal,
-        order_type: OrderType,
-        price: Decimal | None = None,
-    ) -> Order:
+        request: TradeRequest,
+    ) -> Trade:
         """Place an order on Polymarket.
 
+        Translates the generic TradeRequest into Polymarket's CLOB API format,
+        resolving token IDs and mapping fields internally.
+
         Args:
-            token_id: The condition token ID to trade
-            side: BUY or SELL
-            amount: Number of tokens
-            order_type: MARKET or LIMIT
-            price: Required for limit orders
+            request: Generic trade request from the strategy/executor pipeline.
 
         Returns:
-            Order object with status
+            Trade result with execution details.
         """
         if not self._clob_client:
             raise RuntimeError("Not authenticated - credentials required")
 
-        if order_type == OrderType.LIMIT and price is None:
-            raise ValueError("Price required for limit orders")
-
         from uuid import uuid4
 
-        order_id = f"order-{uuid4().hex[:8]}"
+        trade_id = f"trade-{uuid4().hex[:8]}"
 
         try:
+            # Resolve token_id from market_id + outcome
+            token_id = await self.get_token_id(request.market_id, request.outcome)
+
             # Build order params for py-clob-client
-            order_args = {
+            order_args: dict[str, Any] = {
                 "token_id": token_id,
-                "side": "BUY" if side == Side.BUY else "SELL",
-                "size": float(amount),
+                "side": "BUY" if request.side == Side.BUY else "SELL",
+                "size": float(request.amount),
             }
 
-            if order_type == OrderType.LIMIT:
-                order_args["price"] = float(price)  # type: ignore[arg-type]
+            # Use limit order with max_price if specified
+            if request.max_price and request.max_price < Decimal("1"):
+                order_args["price"] = float(request.max_price)
 
             # Place order via CLOB client
             response = self._clob_client.create_and_post_order(order_args)
 
-            # Map status
+            # Map CLOB status to TradeStatus
             status_map = {
-                "MATCHED": OrderStatus.FILLED,
-                "LIVE": OrderStatus.OPEN,
-                "PENDING": OrderStatus.PENDING,
-                "CANCELLED": OrderStatus.CANCELLED,
-                "REJECTED": OrderStatus.REJECTED,
+                "MATCHED": TradeStatus.FILLED,
+                "LIVE": TradeStatus.SUBMITTED,
+                "PENDING": TradeStatus.PENDING,
+                "CANCELLED": TradeStatus.CANCELLED,
+                "REJECTED": TradeStatus.FAILED,
             }
 
-            status = status_map.get(response.get("status", ""), OrderStatus.PENDING)
+            status = status_map.get(response.get("status", ""), TradeStatus.PENDING)
 
-            return Order(
-                id=order_id,
-                external_id=response.get("orderID", ""),
+            filled_amount = Decimal(str(response.get("filledAmount", "0")))
+            avg_price = (
+                Decimal(str(response.get("averagePrice", "0")))
+                if response.get("averagePrice")
+                else request.max_price
+            )
+
+            return Trade(
+                id=trade_id,
+                request_id=request.id,
+                market_id=request.market_id,
                 venue=self.name,
-                token_id=token_id,
-                side=side,
-                order_type=order_type,
-                amount=amount,
-                price=price,
-                filled_amount=Decimal(str(response.get("filledAmount", "0"))),
-                average_price=(
-                    Decimal(str(response.get("averagePrice", "0")))
-                    if response.get("averagePrice")
-                    else None
-                ),
+                side=request.side,
+                outcome=request.outcome,
+                amount=filled_amount if filled_amount > 0 else request.amount,
+                price=avg_price,
                 status=status,
+                external_id=response.get("orderID", ""),
             )
 
         except Exception as e:
-            logger.error("order_placement_failed", error=str(e), token=token_id)
-            return Order(
-                id=order_id,
-                external_id="",
+            logger.error(
+                "order_placement_failed",
+                error=str(e),
+                market_id=request.market_id,
+            )
+            return Trade(
+                id=trade_id,
+                request_id=request.id,
+                market_id=request.market_id,
                 venue=self.name,
-                token_id=token_id,
-                side=side,
-                order_type=order_type,
-                amount=amount,
-                price=price,
-                status=OrderStatus.REJECTED,
-                error_message=str(e),
+                side=request.side,
+                outcome=request.outcome,
+                amount=request.amount,
+                price=request.max_price,
+                status=TradeStatus.FAILED,
             )
 
     async def get_order_status(self, order_id: str) -> Order:

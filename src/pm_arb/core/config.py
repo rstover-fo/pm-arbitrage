@@ -25,9 +25,12 @@ class Settings(BaseSettings):
     polymarket_passphrase: str = ""
     polymarket_private_key: str = ""  # Ethereum private key (0x + 64 hex chars)
 
-    # Kalshi credentials (not implemented yet)
-    kalshi_email: str = ""
-    kalshi_password: str = ""
+    # FRED (Federal Reserve Economic Data)
+    fred_api_key: str = ""
+
+    # Kalshi API credentials (RSA key-based auth, required for live trading)
+    kalshi_api_key_id: str = ""
+    kalshi_private_key: str = ""  # RSA PEM-formatted private key
 
     # Alerts (optional)
     pushover_user_key: str = ""
